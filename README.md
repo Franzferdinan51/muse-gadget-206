@@ -32,12 +32,14 @@ under Component config -> Muse -> Board.
 
 - [x] Kconfig board option (`MUSE_BOARD_WAVESHARE_S3_206`)
 - [x] sdkconfig with Meta's PSRAM/power tuning
-- [x] Board driver skeleton (`boards/board_waveshare_s3_206.c`)
-- [ ] CO5300 init sequence validation on hardware
-- [ ] FT3168 touch driver (no ESP-IDF native driver; trying FT5x06 first)
-- [ ] Audio codec pin confirmation against schematic
-- [ ] AXP2101 rail trim (verify which rails are wired before trimming)
-- [ ] PWR key wiring confirmation
+- [x] Board driver (`boards/board_waveshare_s3_206.c`)
+- [x] CO5300 init sequence (14 cmds, 410x502 windows, from Waveshare BSP v3.0.0)
+- [x] FT3168 touch via `esp_lcd_touch_ft5x06` (register-compatible, 2 fingers)
+- [x] Touch pins from Waveshare pin_config.h (SDA=15, SCL=14, INT=38, RST=9)
+- [x] Audio: ES8311+ES7210 via I2S (MCLK=16, BCLK=41, WS=45, DOUT=42, DIN=40, PA=46)
+- [x] AXP2101: all rails used (DCDC1+ALDO1+BLDO1+BLDO2), no trimming
+- [x] PWR key via PMU PWRON (polled with `muse_pmu_poll_key()`)
+- [ ] Hardware validation when board arrives (display, touch, audio, power)
 
 ## Protocol
 

@@ -66,6 +66,11 @@ dependencies:
     version: "^2.2.0"
     rules:
       - if: "$CONFIG{MUSE_BOARD_ID} == \"m5stack_stopwatch\""
+      - if: "$CONFIG{MUSE_BOARD_ID} == \"waveshare_s3_206\""
+  espressif/esp_lcd_touch_ft5x06:
+    version: "^2.0.0"
+    rules:
+      - if: "$CONFIG{MUSE_BOARD_ID} == \"waveshare_s3_206\""
   espressif/m5stack_core_2:
     version: "^3.0.3"
     rules:
