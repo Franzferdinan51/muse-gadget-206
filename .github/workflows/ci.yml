@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Firmware core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure
+        run: cmake -S firmware -B build/host -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/host --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build/host -C Release --output-on-failure
+
+  python:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: "3.10", os: ubuntu-24.04, name: "Python 3.10"}
+          - {python: "3.12", os: ubuntu-24.04, name: "Python 3.12"}
+          - {python: "3.12", os: ubuntu-24.04-arm, name: "Linux ARM64"}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev,images,display,mqtt]"
+      - name: Build the simulator library
+        run: hermes-gadget build-sim
+      - uses: actions/setup-node@v7  # the installer's console client runs against the simulator core
+        with:
+          node-version: 22
+      - name: Install virtual display
+        run: sudo apt-get update && sudo apt-get install -y xvfb shellcheck
+      - name: Test
+        # Tests that need a Hermes Agent checkout skip themselves here; hermes.yml runs them.
+        env:
+          HERMES_GADGET_UI_TESTS: "1"
+        run: xvfb-run -a pytest -q
+      - name: Build the Linux installation package
+        if: matrix.name == 'Linux ARM64'
+        run: |
+          python -m pip wheel --no-deps . --wheel-dir build/wheels
+          python linux/package.py --library build/host/libhgsim.so --wheel build/wheels/hermes_gadget-*.whl
+          shellcheck linux/install.sh linux/test_install.sh linux/hermes-gadget-device
+      - name: Test installation and updates on Debian Trixie
+        if: matrix.name == 'Linux ARM64'
+        run: |
+          archive=$(find dist -name '*-linux-arm64.tar.gz')
+          docker run --rm -v "$PWD:/source:ro" debian:trixie-slim sh /source/linux/test_install.sh "/source/$archive"
+      - uses: actions/upload-artifact@v7
+        if: matrix.name == 'Linux ARM64'
+        with:
+          name: linux-arm64
+          path: dist/hermes-gadget-*-linux-arm64.tar.gz*
+          if-no-files-found: error
+
+  site:
+    name: Installer site
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install
+        working-directory: site
+        run: npm ci
+      - name: Test
+        working-directory: site
+        run: npm test
+      - name: Build
+        working-directory: site
+        run: node scripts/build.mjs
+      - name: Install browser
+        working-directory: site
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        working-directory: site
+        run: npx playwright test
+
+  esp32:
+    name: ESP32 firmware (${{ matrix.board }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [esp32s3-breadboard, esp32s3-touch-amoled-175, esp32s3-lcd-154, esp32s3-touch-amoled-175c, esp32-s3-box-3, m5stack-cores3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/esp32/platformio.ini', 'firmware/esp32/main/idf_component.yml') }}
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build
+        working-directory: firmware/esp32
+        run: pio run -e ${{ matrix.board }}
+      - name: Package
+        working-directory: firmware/esp32
+        run: python tools/package_release.py --board ${{ matrix.board }} --out dist
+      - name: Keep the images
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.board }}
+          path: firmware/esp32/dist/
+          if-no-files-found: error

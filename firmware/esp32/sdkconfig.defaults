@@ -1,0 +1,27 @@
+# Defaults for every board. Board-specific overrides live in boards/<name>/sdkconfig.defaults
+# and are stacked with:  idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/<name>/sdkconfig.defaults" build
+
+# Two 1.9 MB app slots for over-the-air updates (partitions.csv). A new firmware
+# boots on probation: it must reach Hermes within 5 minutes or the bootloader
+# goes back to the previous one (port_ota.cpp).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# The core runs on the main task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Lets the console's `diag` report every task's unused stack.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# C++: the core uses std::string/std::vector/std::function, no exceptions or RTTI.
+CONFIG_COMPILER_CXX_EXCEPTIONS=n
+CONFIG_COMPILER_CXX_RTTI=n
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Public CA bundle for wss:// servers behind a real certificate.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+
+# Keep logs readable on the serial console that also carries the gadget console.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

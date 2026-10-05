@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hermes Gadget · Your agent, within reach</title>
+  <meta name="description" content="A small device for your own Hermes Agent. Hold a button, ask a question, and hear the answer. Set up a board or try the desktop simulator.">
+  <meta name="theme-color" content="#10151c">
+  <meta property="og:title" content="Hermes Gadget">
+  <meta property="og:description" content="Give your Hermes a place on your desk. Set up a board or try the desktop simulator.">
+  <meta property="og:image" content="https://adolanium.github.io/hermes-gadget-sdk/img/logo.png">
+  <link rel="icon" href="img/logo.png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="home.css">
+  <script type="module" src="home.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="topbar"><div class="wrap topbar-inner">
+    <a class="brand" href="./"><img src="img/logo.png" alt="" width="32" height="32">Hermes Gadget</a>
+    <nav aria-label="Project"><a href="installer.html">Set up a board</a><a href="docs/getting-started.html">Docs</a><a href="https://github.com/Adolanium/hermes-gadget-sdk">GitHub</a></nav>
+  </div></header>
+  <main class="wrap" id="content">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Your agent. Within reach.</p>
+        <h1>Give your Hermes<br>a place on your desk.</h1>
+        <p class="lead">Hold a button. Ask a question. Hear the answer.<br>A small device that connects to your own Hermes Agent, with its tools, memory, and skills.</p>
+        <div class="actions"><a class="button primary" href="installer.html">Set up a board →</a><a class="button" href="docs/desktop.html">Try the simulator</a></div>
+        <p class="hint">Open source · ESP32-S3 · Raspberry Pi · Desktop simulator</p>
+      </div>
+      <figure class="stage">
+        <div class="device-shell"><img src="img/screen-ready.png" width="466" height="466" alt="The simulator's round display, ready for a question"></div>
+        <div class="device-stand" aria-hidden="true"></div>
+        <figcaption>Simulator screen in an illustrative enclosure.<br>Hold to talk. Release to send.</figcaption>
+      </figure>
+    </section>
+    <section aria-labelledby="paths-title">
+      <div class="paths-head"><h2 id="paths-title">Start with what you have.</h2><p class="hint">Choose the path that fits your setup.</p></div>
+      <div class="path-grid">
+        <a class="path" href="installer.html"><span class="number">01 / I HAVE A BOARD</span><h3>Get it connected</h3><p>Install from Chrome or Edge over USB. No firmware toolchain required.</p><span class="link">Open the installer →</span></a>
+        <a class="path" href="docs/desktop.html"><span class="number">02 / I WANT TO TRY IT</span><h3>Meet the simulator</h3><p>Try the device on your computer. Requires Python, CMake, and a compiler.</p><span class="link">Start on desktop →</span></a>
+        <a class="path" href="docs/linux.html"><span class="number">03 / I HAVE A RASPBERRY PI</span><h3>Give your Pi a voice</h3><p>Run a persistent device with USB audio, optional buttons, and a screen. Experimental.</p><span class="link">Set up a Pi →</span></a>
+        <a class="path" href="docs/development.html"><span class="number">04 / I WANT TO BUILD</span><h3>Make something yours</h3><p>Add a board, connect a sensor, or give your gadget a new face.</p><span class="link">Explore the SDK →</span></a>
+      </div>
+    </section>
+    <section class="site-band" aria-label="What your gadget can do">
+      <div><h3>Talk naturally</h3><p>Your Hermes handles speech and replies. <a href="docs/connect-hermes.html#4-enable-speech">Set up speech recognition and a voice.</a></p></div>
+      <div><h3>Give your agent a way to act</h3><p>Show a card, read a sensor, or control an LED. <a href="docs/porting.html">Build with device actions.</a></p></div>
+      <div><h3>Keep your existing Hermes</h3><p>Connect through the Gadget gateway plugin. <a href="docs/connect-hermes.html">Connect your agent.</a></p></div>
+    </section>
+  </main>
+  <footer class="footer"><div class="wrap footer-inner"><p>Independent community project. Not affiliated with Nous Research.</p><p><a href="docs/getting-started.html">Documentation</a> · <a href="https://github.com/Adolanium/hermes-gadget-sdk">GitHub</a> · <a href="https://github.com/Adolanium/hermes-gadget-sdk/blob/main/LICENSE">MIT license</a></p></div></footer>
+</body>
+</html>
