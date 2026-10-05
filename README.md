@@ -47,3 +47,19 @@ Full Muse gadget protocol: `prompt` / `prompt.close` / `display` / `notice` /
 `status` / `reply.delta`, turn lifecycle, OTA updates. The approval flow matches
 the Muse Companion phone app: one question at a time, 600 ms answer debounce,
 TTL auto-deny, exactly-once replies.
+
+## 2.06" Watch Commands
+
+Additional Muse-invokable commands for the watch form factor:
+
+| Command | Params | Description |
+|---|---|---|
+| `companion.set_status` | `text` (string, ≤4000 chars) | Persistent status caption below the face |
+| `pocket.set_status` | `text` (string) | Alias for `companion.set_status` |
+| `display.show_card` | `title`, `body`, `ttl_s` | Hermes-style card overlay, auto-dismiss |
+| `display.show_animation` | — | Clear image/card back to neutral face |
+| `device.health` | — | Battery %, charging, model, firmware, status |
+| `companion.set_display` | `brightness` (0-100), `theme`, `keep_screen_on` | Remote display prefs |
+| `image.start` | `width`, `height` | Begin streamed image upload |
+| `image.data` | `rows` (base64 RGB565), `y` | Stream image rows |
+| `image.end` | — | Finish streamed image |

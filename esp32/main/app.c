@@ -55,6 +55,10 @@
 #include "image_fetch.h"
 #include "noise_tunnel.h"
 #include "led_status.h"
+#include "muse_status.h"
+#include "muse_pmu.h"
+#include "muse_board.h"
+#include "mbedtls/base64.h"
 #include "button.h"
 #include "tunnel_netif.h"
 #include "net_discovery.h"
@@ -1805,6 +1809,7 @@ static cJSON *list_vms_command(void) {
 static cJSON *bug_report_command(
     const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
+    static int s_stream_w, s_stream_h, s_stream_y;
     cJSON *async = cJSON_CreateObject();
     if (!async || !cJSON_AddBoolToObject(async, "_async", true)) {
         cJSON_Delete(async);
@@ -1869,11 +1874,118 @@ static cJSON *on_ws_command(
     }
     if (strcmp(command, "display.show_animation") == 0) {
         led_status_show_animation();
+        muse_card_hide();
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    /* 2.06" watch: persistent status line below the face. */
+    if (strcmp(command, "companion.set_status") == 0 ||
+        strcmp(command, "pocket.set_status") == 0) {
+        cJSON *text = cJSON_GetObjectItem(params, "text");
+        if (!cJSON_IsString(text) || !text->valuestring) {
+            return command_error("missing_param", "text is required");
+        }
+        muse_status_set(text->valuestring);
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    /* 2.06" watch: Hermes-style card overlay (title/body/ttl). */
+    if (strcmp(command, "display.show_card") == 0) {
+        cJSON *title = cJSON_GetObjectItem(params, "title");
+        cJSON *body = cJSON_GetObjectItem(params, "body");
+        cJSON *ttl = cJSON_GetObjectItem(params, "ttl_s");
+        muse_card_show(cJSON_IsString(title) ? title->valuestring : "",
+                       cJSON_IsString(body) ? body->valuestring : "",
+                       cJSON_IsNumber(ttl) ? (int)ttl->valuedouble : 0);
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    /* 2.06" watch: device health (battery, charging, model, version). */
+    if (strcmp(command, "device.health") == 0) {
+        cJSON *result = cJSON_CreateObject();
+        muse_power_t pwr;
+        if (muse_pmu_read_power(&pwr) == ESP_OK) {
+            cJSON_AddNumberToObject(result, "battery_pct", pwr.battery_pct);
+            cJSON_AddBoolToObject(result, "charging", pwr.charging);
+            cJSON_AddNumberToObject(result, "battery_mv", pwr.battery_mv);
+        }
+        cJSON_AddStringToObject(result, "model", "Waveshare ESP32-S3-Touch-AMOLED-2.06");
+        cJSON_AddStringToObject(result, "firmware", "206-1.0.0");
+        cJSON_AddStringToObject(result, "status", muse_status_get());
+        return result;
+    }
+    /* 2.06" watch: remote display preferences. */
+    if (strcmp(command, "companion.set_display") == 0) {
+        cJSON *brightness = cJSON_GetObjectItem(params, "brightness");
+        cJSON *theme = cJSON_GetObjectItem(params, "theme");
+        cJSON *keep_on = cJSON_GetObjectItem(params, "keep_screen_on");
+        if (cJSON_IsNumber(brightness)) {
+            int pct = brightness->valueint;
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            if (muse_board && muse_board->set_brightness) muse_board->set_brightness(pct);
+        }
+        /* theme and keep_screen_on are accepted for compat; the watch
+         * uses a single dark theme and manages sleep via the PMU. */
+        (void)theme;
+        (void)keep_on;
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
         return result;
     }
 #endif
+/* 2.06" watch: image streaming (alternative to display.draw_url).
+ * image.start {width, height} -> image.data {rows: base64 RGB565} -> image.end */
+    if (strcmp(command, "image.start") == 0) {
+        cJSON *w = cJSON_GetObjectItem(params, "width");
+        cJSON *h = cJSON_GetObjectItem(params, "height");
+        if (!cJSON_IsNumber(w) || !cJSON_IsNumber(h)) {
+            return command_error("missing_param", "width and height required");
+        }
+        /* Store dimensions for subsequent image.data calls. */
+        s_stream_w = w->valueint;
+        s_stream_h = h->valueint;
+        s_stream_y = 0;
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    if (strcmp(command, "image.data") == 0) {
+        cJSON *rows = cJSON_GetObjectItem(params, "rows");
+        cJSON *y = cJSON_GetObjectItem(params, "y");
+        if (!cJSON_IsString(rows) || !rows->valuestring) {
+            return command_error("missing_param", "rows (base64) required");
+        }
+        /* Decode base64 RGB565 rows and draw them. */
+        size_t out_len = 0;
+        mbedtls_base64_decode(NULL, 0, &out_len, (const uint8_t *)rows->valuestring, strlen(rows->valuestring));
+        uint8_t *decoded = malloc(out_len);
+        if (!decoded) return command_error("out_of_memory", "failed to allocate");
+        if (mbedtls_base64_decode(decoded, out_len, &out_len,
+                                   (const uint8_t *)rows->valuestring, strlen(rows->valuestring)) != 0) {
+            free(decoded);
+            return command_error("invalid_param", "base64 decode failed");
+        }
+        int row_y = cJSON_IsNumber(y) ? y->valueint : s_stream_y;
+        int row_h = (int)(out_len / (s_stream_w * 2));
+        if (row_h > 0 && s_stream_w > 0) {
+            muse_ui_image_draw(0, row_y, s_stream_w, row_h, (const uint16_t *)decoded);
+            s_stream_y = row_y + row_h;
+        }
+        free(decoded);
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    if (strcmp(command, "image.end") == 0) {
+        s_stream_w = s_stream_h = s_stream_y = 0;
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
 #if CONFIG_MUSE_WATCHER_CAMERA
     if (strcmp(command, "camera.capture") == 0) {
         watcher_camera_task_args_t *args = calloc(1, sizeof(*args));
