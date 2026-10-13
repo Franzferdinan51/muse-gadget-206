@@ -43,13 +43,13 @@ CONFIG_LV_DEF_REFR_PERIOD=15
 # The Muse Gloss bubble recipe is a 3-stop gradient (DESIGN_TOKENS.md G1).
 CONFIG_LV_GRADIENT_MAX_STOPS=3
 CONFIG_LV_OBJ_STYLE_CACHE=y
+# Text is the baked Montserrat in components/muse/fonts (DESIGN_TOKENS.md
+# section 6; tools/muse/gen_fonts.sh): LVGL's built-in Montserrat and
+# unscii_16 are not compiled. unscii_8 stays only as LVGL's default font --
+# the fallback a widget gets if it forgets to set one; every Muse label
+# sets a baked font explicitly (muse_theme.h).
 CONFIG_LV_FONT_UNSCII_8=y
-CONFIG_LV_FONT_UNSCII_16=y
-CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_16=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_28=y
-CONFIG_LV_FONT_DEFAULT_MONTSERRAT_20=y
+CONFIG_LV_FONT_DEFAULT_UNSCII_8=y
 CONFIG_LV_THEME_DEFAULT_DARK=y
 # Print LVGL's warnings to the console, including the expression of a failed
 # assert just before components/muse/CMakeLists.txt's handler aborts.

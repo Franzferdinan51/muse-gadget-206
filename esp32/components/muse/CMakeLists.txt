@@ -50,6 +50,10 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND srcs "muse_chat_link.c")   # text replies over Link's session
     endif()
     list(APPEND srcs "muse_chat_text.c")
+    # Baked Montserrat (tools/muse/gen_fonts.sh): the UI's only text fonts.
+    list(APPEND srcs
+        "fonts/muse_font_12.c" "fonts/muse_font_14.c" "fonts/muse_font_16.c"
+        "fonts/muse_font_20.c" "fonts/muse_font_28.c")
     if(CONFIG_MUSE_CJK_FONT)
         list(APPEND srcs "fonts/muse_font_cjk_16.c")   # captions' CJK fallback
     endif()

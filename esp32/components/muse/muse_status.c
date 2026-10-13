@@ -68,7 +68,7 @@ static void status_create_ui(lv_timer_t *t) {
     lv_obj_set_width(s_status_label, 390);
     lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_status_label, MUSE_FONT_16, 0);
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_label_set_text(s_status_label, s_status);
@@ -99,14 +99,14 @@ static void card_create_ui(void) {
     s_card_title_lbl = lv_label_create(s_card);
     lv_obj_set_width(s_card_title_lbl, 320);
     lv_label_set_long_mode(s_card_title_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(s_card_title_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_card_title_lbl, MUSE_FONT_20, 0);
     lv_obj_set_style_text_color(s_card_title_lbl, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_set_style_text_align(s_card_title_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_card_title_lbl, LV_ALIGN_TOP_MID, 0, 16);
     lv_label_set_text(s_card_title_lbl, s_card_title);
 
     s_card_body_lbl = lv_label_create(s_card);
-    lv_obj_set_style_text_font(s_card_body_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_card_body_lbl, MUSE_FONT_16, 0);
     lv_obj_set_style_text_color(s_card_body_lbl, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_set_width(s_card_body_lbl, 320);
     lv_label_set_long_mode(s_card_body_lbl, LV_LABEL_LONG_WRAP);

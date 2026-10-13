@@ -47,9 +47,9 @@ static const char *TAG = "muse_menu";
 
 /* 128 px screens want a smaller face than the 14 px every board has. */
 #if LV_FONT_MONTSERRAT_12
-#define FONT_COMPACT (&lv_font_montserrat_12)
+#define FONT_COMPACT (MUSE_FONT_12)
 #else
-#define FONT_COMPACT (&lv_font_montserrat_14)
+#define FONT_COMPACT (MUSE_FONT_14)
 #endif
 
 #define IDLE_CLOSE_S 30.0f      /* back to the face if left alone */
@@ -512,8 +512,8 @@ static void align_on_bar(lv_obj_t *l, lv_align_t icon, int pad)
 void muse_menu_build(lv_obj_t *parent, int w, int h)
 {
     bool small = h < 200 || w < 200;
-    const lv_font_t *font = small ? FONT_COMPACT : &lv_font_montserrat_20;
-    const lv_font_t *fine = small ? &lv_font_unscii_8 : &lv_font_unscii_16;
+    const lv_font_t *font = small ? FONT_COMPACT : MUSE_FONT_20;
+    const lv_font_t *fine = small ? FONT_COMPACT : MUSE_FONT_16;
     int pad = small ? 2 : 8;
     int title_h = small ? 13 : 40;
     int hint_h = small ? 17 : 44;

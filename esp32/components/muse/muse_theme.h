@@ -86,6 +86,33 @@
 #define MUSE_SHADOW_Y 8
 #define MUSE_GLOSS_H 10
 
+/* ---- Fonts (tokens section 6): baked Montserrat ----
+ * The UI's one voice: Montserrat Medium baked into the firmware
+ * (components/muse/fonts/, tools/muse/gen_fonts.sh), 4bpp AA, the
+ * section 6 charset plus the LV_SYMBOL symbol set. LVGL's built-in
+ * Montserrat is not compiled for Muse boards, and unscii survives only
+ * as LVGL's default font -- the fallback a widget gets if it forgets to
+ * set one. Every Muse label sets its font from here. */
+LV_FONT_DECLARE(muse_font_12)
+LV_FONT_DECLARE(muse_font_14)
+LV_FONT_DECLARE(muse_font_16)
+LV_FONT_DECLARE(muse_font_20)
+LV_FONT_DECLARE(muse_font_28)
+
+#define MUSE_FONT_12 (&muse_font_12)
+#define MUSE_FONT_14 (&muse_font_14)
+#define MUSE_FONT_16 (&muse_font_16)
+#define MUSE_FONT_20 (&muse_font_20)
+#define MUSE_FONT_28 (&muse_font_28)
+
+/* Roles, at the type scale's LVGL sizes (tokens section 6). */
+#define MUSE_FONT_STATE MUSE_FONT_20   /* Headline: the state word */
+#define MUSE_FONT_CAPTION MUSE_FONT_16 /* Caption: replies, the avatar caption */
+#define MUSE_FONT_BODY MUSE_FONT_16    /* Body */
+#define MUSE_FONT_TITLE MUSE_FONT_20   /* Title */
+#define MUSE_FONT_LABEL MUSE_FONT_14   /* Label: power, values, hints */
+#define MUSE_FONT_DISPLAY MUSE_FONT_28 /* the pairing code, the big icons */
+
 /* ---- Gradient descriptors (tokens section 4) ---- */
 
 /* G1 surface gradient: bubbleTop -> bubble -> bubbleBot, vertical. */

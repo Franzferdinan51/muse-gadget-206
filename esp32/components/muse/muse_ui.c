@@ -55,7 +55,7 @@ static const char *TAG = "muse_ui";
 #define METER_SEG_PX 9
 #define METER_GAP_PX 4
 #define RING_RANGE 1000
-#define CAPTION_W 256           /* 16 columns of unscii_16, the width reply captions wrap to */
+#define CAPTION_W 256           /* the width reply captions wrap to */
 #define CAPTION_LINE_SPACE 2
 #define ART_BLANK_ROWS 3        /* Muse's art never reaches the grid's bottom rows */
 #define MINI_CELL_PX 2          /* Muse's grid cells over a reply that's read */
@@ -75,9 +75,9 @@ static const char *TAG = "muse_ui";
 
 /* Text on 128 px screens, as in the button menu (muse_menu.c). */
 #if LV_FONT_MONTSERRAT_12
-#define FONT_COMPACT (&lv_font_montserrat_12)
+#define FONT_COMPACT (MUSE_FONT_12)
 #else
-#define FONT_COMPACT (&lv_font_montserrat_14)
+#define FONT_COMPACT (MUSE_FONT_14)
 #endif
 
 /*
@@ -434,7 +434,7 @@ static void build_button_icons(lv_obj_t *face)
     if (a->align == LV_ALIGN_DEFAULT) {
         return;
     }
-    s_aux_icon = make_label(face, s_small ? &lv_font_montserrat_14 : &lv_font_montserrat_28, COLOR_DIM);
+    s_aux_icon = make_label(face, s_small ? MUSE_FONT_14 : MUSE_FONT_28, COLOR_DIM);
     lv_label_set_text(s_aux_icon, muse_board->touch ? LV_SYMBOL_POWER : LV_SYMBOL_LIST);
     lv_obj_align(s_aux_icon, a->align, a->x, a->y);
 }
@@ -454,19 +454,19 @@ static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compac
 LV_FONT_DECLARE(muse_font_cjk_16)
 #endif
 
-/* unscii-16 for captions and replies; with CONFIG_MUSE_CJK_FONT, a copy that
- * falls back to Unifont's 16x16 CJK, the same cell, for what unscii lacks. */
+/* Baked Montserrat 16 for captions and replies; with CONFIG_MUSE_CJK_FONT,
+ * a copy that falls back to Unifont's 16x16 CJK for what Montserrat lacks. */
 static const lv_font_t *caption_font(void)
 {
 #if CONFIG_MUSE_CJK_FONT
     static lv_font_t font;
     if (!font.get_glyph_dsc) {
-        font = lv_font_unscii_16;
+        font = muse_font_16;
         font.fallback = &muse_font_cjk_16;
     }
     return &font;
 #else
-    return &lv_font_unscii_16;
+    return MUSE_FONT_CAPTION;
 #endif
 }
 
@@ -556,7 +556,7 @@ static void build_speaker(lv_obj_t *face, int x, int y)
     for (size_t i = 0; i < sizeof(EVENTS) / sizeof(EVENTS[0]); i++) {
         lv_obj_add_event_cb(s_speaker, on_speaker_event, EVENTS[i], NULL);
     }
-    s_speaker_icon = make_label(s_speaker, &lv_font_montserrat_28, COLOR_DIM);
+    s_speaker_icon = make_label(s_speaker, MUSE_FONT_28, COLOR_DIM);
     lv_obj_center(s_speaker_icon);
     lv_obj_align(s_speaker, LV_ALIGN_CENTER, x, y);
     show_speaker(muse_settings_speaker_on());
@@ -858,7 +858,7 @@ static void build_screen(void)
      * whose blank bottom rows can tuck in behind the meter.
      */
     int ring_in = (s_w < s_h ? s_w : s_h) / 2 - 10;   /* the ring's inner edge */
-    int cap_h = 2 * lv_font_get_line_height(&lv_font_unscii_16) + CAPTION_LINE_SPACE;
+    int cap_h = 2 * lv_font_get_line_height(caption_font()) + CAPTION_LINE_SPACE;
     int cap_bottom = 179;                              /* a 466 px circle's; fine for rectangles */
     if (muse_board->round) {
         cap_bottom = (int)sqrtf((float)(ring_in * ring_in - CAPTION_W * CAPTION_W / 4)) - 3;
@@ -894,13 +894,13 @@ static void build_screen(void)
     lv_obj_set_flex_align(status, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(status, s_small ? 4 : 8, 0);
     lv_obj_align(status, LV_ALIGN_TOP_MID, 0, s_small ? 1 : 20 + s_dy);
-    s_wifi_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
-    s_ble_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
-    s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
+    s_wifi_icon = make_label(status, MUSE_FONT_14, COLOR_DIM);
+    s_ble_icon = make_label(status, MUSE_FONT_14, COLOR_DIM);
+    s_power_lbl = make_label(status, MUSE_FONT_LABEL, COLOR_DIM);
 
     /* The compact layout leaves the state to the avatar and the caption,
      * unless the screen is tall enough to fit it in small type above Muse. */
-    s_state_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, MUSE_TEXT_NUM);
+    s_state_lbl = make_label(face, s_small ? FONT_COMPACT : MUSE_FONT_STATE, MUSE_TEXT_NUM);
     lv_obj_set_style_text_letter_space(s_state_lbl, s_small ? 1 : 2, 0);
     lv_obj_align(s_state_lbl, LV_ALIGN_TOP_MID, 0, s_small ? 22 : 40 + s_dy);
     lv_obj_set_flag(s_state_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
@@ -909,17 +909,17 @@ static void build_screen(void)
      * more than one on the bench, the screen says which one to pick in the
      * Muse app. update_chrome() fills it in, shortens it to the hex tail on a
      * screen too narrow for the whole thing, and empties it once paired. */
-    s_name_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, COLOR_DIM);
+    s_name_lbl = make_label(face, s_small ? FONT_COMPACT : MUSE_FONT_16, COLOR_DIM);
     lv_obj_align(s_name_lbl, LV_ALIGN_TOP_MID, 0, s_small ? 32 : 60 + s_dy);
     /* Same rule as the state label: a square 128 px screen centres Muse over
      * these rows, so there's nowhere to put this without covering the face. */
     lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
 
-    s_caption_lbl = make_label(face, font_pick(caption_font(), &lv_font_unscii_8), COLOR_CAPTION);
+    s_caption_lbl = make_label(face, font_pick(caption_font(), FONT_COMPACT), COLOR_CAPTION);
     if (s_small) {
         /* Two lines over the bottom of the face, on a dark band so they stay
          * legible. A tall screen has room to keep them above the mic icon. */
-        lv_obj_set_size(s_caption_lbl, s_w, 2 * 8 + 2 + 4);
+        lv_obj_set_size(s_caption_lbl, s_w, 2 * lv_font_get_line_height(FONT_COMPACT) + 2 + 4);
         lv_obj_set_style_pad_ver(s_caption_lbl, 2, 0);
         lv_obj_set_style_text_line_space(s_caption_lbl, 2, 0);
         lv_obj_set_style_bg_color(s_caption_lbl, lv_color_hex(MUSE_INK), 0);
@@ -928,7 +928,7 @@ static void build_screen(void)
         /* Touch screens need the caption above the navigation dots too. */
         lv_obj_align(s_caption_lbl, LV_ALIGN_BOTTOM_MID, 0, (s_tall || s_tv) ? -30 : -3);
 #if CONFIG_MUSE_CJK_FONT
-        /* CJK doesn't fit unscii-8's cell, so a reply with CJK in it fills the
+        /* CJK doesn't fit the compact font's cell, so a reply with CJK in it fills the
          * band one line at a time in the 16 px caption font instead. */
         muse_state_set_cjk_page(s_w / lv_font_get_glyph_width(caption_font(), 'M', ' '), 1);
 #endif
@@ -1094,11 +1094,11 @@ static void build_overlays(void)
     lv_obj_set_width(muse_theme_gloss(s_pair), (s_small ? s_w - 8 : 300) - 24);
     lv_obj_remove_flag(s_pair, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pair, LV_OBJ_FLAG_HIDDEN);
-    s_pair_title = make_label(s_pair, font_pick(&lv_font_montserrat_20, FONT_COMPACT), COLOR_LIT);
+    s_pair_title = make_label(s_pair, font_pick(MUSE_FONT_20, FONT_COMPACT), COLOR_LIT);
     lv_label_set_text(s_pair_title, "Pairing code");
-    s_pair_code = make_label(s_pair, font_pick(&lv_font_montserrat_28, &lv_font_montserrat_20), MUSE_BOOT_ACCENT);
+    s_pair_code = make_label(s_pair, font_pick(MUSE_FONT_28, MUSE_FONT_20), MUSE_BOOT_ACCENT);
     lv_obj_set_style_text_letter_space(s_pair_code, s_small ? 2 : 6, 0);
-    s_pair_hint = make_label(s_pair, font_pick(&lv_font_montserrat_14, FONT_COMPACT), COLOR_DIM);
+    s_pair_hint = make_label(s_pair, font_pick(MUSE_FONT_14, FONT_COMPACT), COLOR_DIM);
     lv_label_set_text(s_pair_hint, s_small ? "Enter on phone" : "Enter it on your phone");
     /* Wraps: "bottom right button" is wider than the AIPI's card. */
     lv_obj_set_width(s_pair_hint, lv_pct(100));
@@ -1240,7 +1240,7 @@ static void update_chrome(float now)
      * read layout unhides it on the way out. A narrow screen gets the hex tail
      * on its own, which is the part that differs between two of them, rather
      * than a head that ends in dots before it gets there. */
-    const lv_font_t *name_font = s_small ? &lv_font_unscii_8 : &lv_font_unscii_16;
+    const lv_font_t *name_font = s_small ? FONT_COMPACT : MUSE_FONT_16;
     int name_cw = lv_font_get_glyph_width(name_font, 'M', ' ');
     const char *shown = paired ? "" : b.name;
     if (name_cw > 0 && (int)strlen(shown) * name_cw > s_w) {
@@ -1432,7 +1432,7 @@ static void update_status(muse_mode_t mode, float now)
         lv_obj_t *lbl = answer >= 0 ? s_reply_lbl : s_caption_lbl;
 #if CONFIG_MUSE_CJK_FONT
         if (s_small) {
-            lv_obj_set_style_text_font(s_caption_lbl, muse_text_has_cjk(caption) ? caption_font() : &lv_font_unscii_8, 0);
+            lv_obj_set_style_text_font(s_caption_lbl, muse_text_has_cjk(caption) ? caption_font() : FONT_COMPACT, 0);
         }
 #endif
         lv_label_set_text(lbl, caption);

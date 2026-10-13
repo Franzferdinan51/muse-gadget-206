@@ -24,9 +24,10 @@ extern "C" {
 #endif
 
 /*
- * The screen's fonts are LVGL's builds of unscii and Montserrat: ASCII, and
- * Montserrat's symbols. Text from elsewhere (replies, network names) gets
- * ASCII stand-ins for what they lack: curly quotes become straight ones, an em
+ * The screen's font is the baked Montserrat (tools/muse/gen_fonts.sh):
+ * ASCII, the DESIGN_TOKENS section 6 extras, and the FontAwesome symbols.
+ * Text from elsewhere (replies, network names) gets ASCII stand-ins anyway:
+ * curly quotes become straight ones, an em
  * dash "--", accented letters their plain ones. Emoji go; anything else stays,
  * and with CONFIG_MUSE_CJK_FONT the captions draw CJK from a fallback font.
  */
