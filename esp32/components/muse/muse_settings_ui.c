@@ -35,6 +35,7 @@
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_text.h"
+#include "muse_theme.h"
 #include "muse_ui.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
@@ -45,14 +46,12 @@
 #define ROW_H 58
 #define MAX_APS 12
 
-#define COLOR_TEXT 0xf2efff
-#define COLOR_DIM 0x8b84a8
-#define COLOR_CARD 0x1a1530
-#define COLOR_CARD_PRESSED 0x2e2552
-#define COLOR_ACCENT 0xa77dff
-#define COLOR_OK 0x6ff0bf
-#define COLOR_WARN 0xffb45c
-#define COLOR_DANGER 0xff5c5c
+/* Colors are Muse Gloss tokens (muse_theme.h). */
+#define COLOR_TEXT MUSE_TEXT
+#define COLOR_DIM MUSE_DIM
+#define COLOR_OK MUSE_OK
+#define COLOR_WARN MUSE_WARN
+#define COLOR_DANGER MUSE_DANGER
 
 typedef void (*text_done_cb_t)(const char *text);
 
@@ -185,7 +184,7 @@ static lv_obj_t *back_button(lv_obj_t *p)
     lv_obj_set_size(b, 56, 48);
     lv_obj_align(b, LV_ALIGN_TOP_MID, -112, 28);
     lv_obj_add_event_cb(b, on_back, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *arrow = label(b, &lv_font_montserrat_20, COLOR_ACCENT, LV_SYMBOL_LEFT);
+    lv_obj_t *arrow = label(b, &lv_font_montserrat_20, MUSE_BLUE, LV_SYMBOL_LEFT);
     lv_obj_center(arrow);
     return b;
 }
@@ -203,7 +202,7 @@ static lv_obj_t *page(lv_obj_t *tile, const char *title, bool back, lv_obj_t **l
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
     catch_swipes(p);
 
-    lv_obj_t *t = label(p, compact ? &lv_font_montserrat_16 : &lv_font_unscii_16, COLOR_ACCENT, title);
+    lv_obj_t *t = label(p, compact ? &lv_font_montserrat_16 : &lv_font_unscii_16, MUSE_BLUE, title);
     lv_obj_set_style_text_letter_space(t, compact ? 0 : 2, 0);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, compact ? (back ? 12 : 8) : 44);
 
@@ -235,10 +234,9 @@ static lv_obj_t *card(lv_obj_t *list, bool clickable)
     lv_obj_t *c = clickable ? lv_button_create(list) : lv_obj_create(list);
     lv_obj_remove_style_all(c);
     lv_obj_set_size(c, lv_pct(100), ROW_H);
-    lv_obj_set_style_radius(c, 18, 0);
-    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(c, lv_color_hex(COLOR_CARD), 0);
-    lv_obj_set_style_bg_color(c, lv_color_hex(COLOR_CARD_PRESSED), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(c, MUSE_R_BUBBLE, 0);
+    muse_theme_bubble(c);
+    lv_obj_set_width(muse_theme_gloss(c), lv_pct(92));
     lv_obj_set_style_pad_hor(c, 16, 0);
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -253,7 +251,7 @@ static lv_obj_t *row(lv_obj_t *list, const char *icon, const char *text, lv_obj_
 {
     lv_obj_t *c = card(list, true);
     if (icon) {
-        label(c, &lv_font_montserrat_20, COLOR_ACCENT, icon);
+        label(c, &lv_font_montserrat_20, MUSE_BLUE, icon);
     }
     lv_obj_t *t = label(c, &lv_font_montserrat_20, COLOR_TEXT, text);
     lv_obj_set_flex_grow(t, 1);
@@ -275,8 +273,8 @@ static lv_obj_t *switch_row(lv_obj_t *list, const char *text, bool on, lv_event_
     lv_obj_set_flex_grow(t, 1);
     lv_obj_t *sw = lv_switch_create(c);
     lv_obj_set_size(sw, 60, 32);
-    lv_obj_set_style_bg_color(sw, lv_color_hex(0x3a3358), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(sw, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(sw, lv_color_hex(MUSE_FAINT), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sw, lv_color_hex(MUSE_BLUE), LV_PART_INDICATOR | LV_STATE_CHECKED);
     if (on) {
         lv_obj_add_state(sw, LV_STATE_CHECKED);
     }
@@ -308,7 +306,7 @@ static lv_obj_t *slider(lv_obj_t *list, const char *text, int lo, int hi, int va
     lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
 
     label(c, &lv_font_montserrat_20, COLOR_TEXT, text);
-    lv_obj_t *v = label(c, &lv_font_montserrat_20, COLOR_ACCENT, "");
+    lv_obj_t *v = label(c, &lv_font_montserrat_20, MUSE_TEXT, "");
     lv_obj_align(v, LV_ALIGN_TOP_RIGHT, 0, 0);
     *value_out = v;
 
@@ -318,8 +316,8 @@ static lv_obj_t *slider(lv_obj_t *list, const char *text, int lo, int hi, int va
     lv_obj_align(s, LV_ALIGN_TOP_MID, 0, 40);
     lv_slider_set_range(s, lo, hi);
     lv_slider_set_value(s, value, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x2a2345), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s, lv_color_hex(MUSE_RING_TRACK), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s, lv_color_hex(MUSE_BLUE), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(s, lv_color_hex(COLOR_TEXT), LV_PART_KNOB);
     lv_obj_set_style_pad_all(s, 6, LV_PART_KNOB);
     lv_obj_set_ext_click_area(s, 16);
@@ -352,7 +350,7 @@ static lv_obj_t *info_row(lv_obj_t *list, const char *text)
     lv_obj_set_height(c, 44);
     lv_obj_t *t = label(c, &lv_font_montserrat_16, COLOR_TEXT, text);
     lv_obj_set_flex_grow(t, 1);
-    return label(c, &lv_font_montserrat_16, COLOR_ACCENT, "");
+    return label(c, &lv_font_montserrat_16, MUSE_DIM, "");
 }
 
 /* ---------- navigation ---------- */
@@ -481,9 +479,8 @@ static void build_keyboard(void)
     s_text_show = lv_button_create(s_text);
     lv_obj_remove_style_all(s_text_show);
     lv_obj_set_size(s_text_show, 70, text_px(48));
-    lv_obj_set_style_radius(s_text_show, 14, 0);
-    lv_obj_set_style_bg_opa(s_text_show, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_text_show, lv_color_hex(COLOR_CARD), 0);
+    lv_obj_set_style_radius(s_text_show, MUSE_R_CARD, 0);
+    muse_theme_bubble(s_text_show);
     lv_obj_add_event_cb(s_text_show, on_text_show, LV_EVENT_CLICKED, NULL);
     lv_obj_center(label(s_text_show, &lv_font_montserrat_16, COLOR_TEXT, "Show"));
 
@@ -502,9 +499,10 @@ static void build_keyboard(void)
     lv_obj_set_style_pad_all(s_text_kb, 2, 0);
     lv_obj_set_style_pad_gap(s_text_kb, 4, 0);
     lv_obj_set_style_text_font(s_text_kb, &lv_font_montserrat_20, LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(s_text_kb, lv_color_hex(COLOR_CARD), LV_PART_ITEMS);
+    lv_obj_set_style_bg_grad(s_text_kb, muse_grad_surface(), LV_PART_ITEMS);
+    lv_obj_set_style_bg_grad(s_text_kb, muse_grad_surface_pressed(), LV_PART_ITEMS | LV_STATE_PRESSED);
     lv_obj_set_style_text_color(s_text_kb, lv_color_hex(COLOR_TEXT), LV_PART_ITEMS);
-    lv_obj_set_style_radius(s_text_kb, 8, LV_PART_ITEMS);
+    lv_obj_set_style_radius(s_text_kb, MUSE_R_CHIP, LV_PART_ITEMS);
     lv_obj_set_style_border_width(s_text_kb, 0, LV_PART_ITEMS);
     lv_obj_remove_flag(s_text_kb, LV_OBJ_FLAG_GESTURE_BUBBLE);   /* a sloppy swipe mustn't lose the text */
     lv_keyboard_set_textarea(s_text_kb, s_text_ta);
@@ -523,7 +521,7 @@ static void build_text_page(lv_obj_t *tile)
     lv_obj_t *back = back_button(s_text);
 
     /* Between the back arrow and its mirror image. */
-    s_text_title = label(s_text, &lv_font_montserrat_20, COLOR_ACCENT, "");
+    s_text_title = label(s_text, &lv_font_montserrat_20, MUSE_BLUE, "");
     lv_obj_set_width(s_text_title, 150);
     lv_obj_set_style_text_align(s_text_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_text_title, LV_LABEL_LONG_MODE_DOTS);
@@ -538,11 +536,11 @@ static void build_text_page(lv_obj_t *tile)
     lv_obj_set_style_text_font(s_text_ta, font, 0);
     lv_obj_set_style_pad_ver(s_text_ta, pad > 0 ? pad : 0, 0);
     lv_obj_set_style_pad_hor(s_text_ta, 14, 0);
-    lv_obj_set_style_bg_color(s_text_ta, lv_color_hex(COLOR_CARD), 0);
+    lv_obj_set_style_bg_color(s_text_ta, lv_color_hex(MUSE_INPUT), 0);
     lv_obj_set_style_text_color(s_text_ta, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_set_style_border_color(s_text_ta, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_set_style_border_color(s_text_ta, lv_color_hex(MUSE_BLUE), 0);
     lv_obj_set_style_border_width(s_text_ta, border, 0);
-    lv_obj_set_style_radius(s_text_ta, 14, 0);
+    lv_obj_set_style_radius(s_text_ta, MUSE_R_CARD, 0);
     lv_obj_set_style_text_font(s_text_ta, &lv_font_montserrat_16, LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_text_color(s_text_ta, lv_color_hex(COLOR_DIM), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_state(s_text_ta, LV_STATE_FOCUSED);
@@ -759,7 +757,7 @@ static void build_wifi_page(lv_obj_t *tile)
     s_wifi_status = note(list, "");
 
     s_wifi_saved = column(list);
-    s_wifi_scan_btn = button(list, LV_SYMBOL_REFRESH "  Scan for networks", COLOR_ACCENT, on_wifi_scan, &s_wifi_scan_lbl);
+    s_wifi_scan_btn = button(list, LV_SYMBOL_REFRESH "  Scan for networks", MUSE_BLUE, on_wifi_scan, &s_wifi_scan_lbl);
     s_wifi_list = column(list);
 
     row(list, LV_SYMBOL_EDIT, "Other network...", NULL, on_wifi_other, NULL);
@@ -884,7 +882,7 @@ static void build_hatch_page(lv_obj_t *tile)
     row(list, NULL, "Server", &s_hatch_host, on_hatch_host, NULL);
     row(list, NULL, "VM ID", &s_hatch_vm, on_hatch_vm, NULL);
     row(list, NULL, "Device token", &s_hatch_token, on_hatch_token, NULL);
-    button(list, "Test connection", COLOR_ACCENT, on_hatch_test, NULL);
+    button(list, "Test connection", MUSE_BLUE, on_hatch_test, NULL);
     note(list, "Pair with the Muse app to use your account; a device token here overrides it, and a long one is "
                "easier to send over Bluetooth. The VM ID picks one of your VMs. "
                "Reset pairing forgets Wi-Fi and the app pairing, then restarts.");
@@ -1036,7 +1034,7 @@ static void build_sound_page(lv_obj_t *tile)
     lv_obj_set_size(s_mic_bar, lv_pct(94), 10);
     lv_obj_align(s_mic_bar, LV_ALIGN_TOP_MID, 0, 26);
     lv_bar_set_range(s_mic_bar, 0, 60);   /* -70..-10 dBFS */
-    lv_obj_set_style_bg_color(s_mic_bar, lv_color_hex(0x2a2345), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_mic_bar, lv_color_hex(MUSE_RING_TRACK), LV_PART_MAIN);
     lv_obj_set_style_anim_duration(s_mic_bar, 80, 0);
     note(list, "Talk at arm's length: the bar should reach green (-30 to -15 dBFS) without going orange.");
 
@@ -1057,7 +1055,7 @@ static void tick_sound(void)
     int v = (int)(db + 70.0f);
     v = v < 0 ? 0 : (v > 60 ? 60 : v);
     lv_bar_set_value(s_mic_bar, v, LV_ANIM_ON);
-    uint32_t color = db > -12.0f ? COLOR_WARN : (db > -30.0f ? COLOR_OK : COLOR_ACCENT);
+    uint32_t color = db > -12.0f ? COLOR_WARN : (db > -30.0f ? COLOR_OK : MUSE_STATE_LISTENING);
     lv_obj_set_style_bg_color(s_mic_bar, lv_color_hex(color), LV_PART_INDICATOR);
     set_val(s_mic_val, "%d dBFS", (int)db);
 }
@@ -1082,9 +1080,9 @@ static void build_sleep_page(lv_obj_t *tile)
     note(list, "Turn the screen off after Muse has been idle for:");
     for (int i = 0; i < SLEEP_COUNT; i++) {
         row(list, NULL, SLEEP_NAMES[i], &s_sleep_checks[i], on_sleep_choice, (void *)(intptr_t)i);
-        lv_obj_set_style_text_color(s_sleep_checks[i], lv_color_hex(COLOR_ACCENT), 0);
+        lv_obj_set_style_text_color(s_sleep_checks[i], lv_color_hex(MUSE_BLUE), 0);
     }
-    button(list, LV_SYMBOL_EYE_CLOSE "  Sleep now", COLOR_ACCENT, on_sleep_now, NULL);
+    button(list, LV_SYMBOL_EYE_CLOSE "  Sleep now", MUSE_BLUE, on_sleep_now, NULL);
     note(list, "Tap the screen or press either button to wake.");
 }
 
@@ -1129,7 +1127,7 @@ static void build_battery_page(lv_obj_t *tile)
     s_batt_wakes = info_row(list, "Wakes");
     s_batt_busy = info_row(list, "CPU busy");
     s_batt_awake = note(list, "");
-    button(list, LV_SYMBOL_REFRESH "  Start over", COLOR_ACCENT, on_battery_reset, NULL);
+    button(list, LV_SYMBOL_REFRESH "  Start over", MUSE_BLUE, on_battery_reset, NULL);
     note(list, "Measures from unplugging USB until it's plugged back in. The gauge moves in 1% steps, so give it a "
                "few hours. Chip asleep is time in light sleep; CPU busy is time a core was running a task.");
 }
