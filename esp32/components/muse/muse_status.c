@@ -87,7 +87,7 @@ static void card_create_ui(void) {
     lv_obj_set_size(s_card, 360, 300);
     lv_obj_align(s_card, LV_ALIGN_CENTER, 0, -40);
     lv_obj_set_style_radius(s_card, 16, 0);
-    lv_obj_set_style_bg_opa(s_card, LV_OPA_95, 0);
+    lv_obj_set_style_bg_opa(s_card, LV_OPA_90, 0);
     lv_obj_add_flag(s_card, LV_OBJ_FLAG_CLICKABLE);
 
     s_card_title_lbl = lv_label_create(s_card);
@@ -106,6 +106,22 @@ static void card_create_ui(void) {
     lv_label_set_text(s_card_body_lbl, s_card_body);
 }
 
+/* lv_async_call callbacks take exactly one user-data argument. The
+ * call sites below used to cast (lv_async_cb_t) onto functions with
+ * other signatures (and one passed a third argument), which LVGL 9
+ * rejects at compile time. These trampolines read the file-static
+ * state instead; it is copied under s_lock before the async call is
+ * queued, so the latest values are what get applied. */
+static void status_label_apply_cb(void *user_data) {
+    (void)user_data;
+    if (s_status_label) lv_label_set_text(s_status_label, s_status);
+}
+
+static void card_create_ui_cb(void *user_data) {
+    (void)user_data;
+    card_create_ui();
+}
+
 void muse_status_set(const char *text) {
     ensure_lock();
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -116,7 +132,7 @@ void muse_status_set(const char *text) {
 
     /* Marshal to LVGL task. */
     if (s_status_label) {
-        lv_async_call((lv_async_cb_t)lv_label_set_text, s_status_label, s_status);
+        lv_async_call(status_label_apply_cb, NULL);
     } else {
         /* UI not up yet; create on next tick. */
         lv_timer_create(status_create_ui, 100, NULL);
@@ -140,7 +156,7 @@ void muse_card_show(const char *title, const char *body, int ttl_s) {
      * already on the LVGL task; otherwise async. */
     if (!s_card) {
         /* Defer creation to LVGL task via async call. */
-        lv_async_call((lv_async_cb_t)card_create_ui, NULL);
+        lv_async_call(card_create_ui_cb, NULL);
     } else {
         lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_card_title_lbl, s_card_title);

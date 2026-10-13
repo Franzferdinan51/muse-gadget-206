@@ -22,7 +22,7 @@
  *
  * Pinout (Waveshare demo + community ESPHome configs):
  *   Display QSPI: CS=12, SCK=11, D0=4, D1=5, D2=6, D3=7, RST=8, EN=13
- *   Touch I2C:    SDA=8, SCL=9, INT=21, ADDR=0x38 (FT3168)
+ *   Touch I2C:    SDA=15, SCL=14, INT=38, RST=9, ADDR=0x38 (FT3168)
  *   IMU:          QMI8658 @ 0x6B (same I2C bus)
  *   PMIC:         AXP2101 @ 0x34 (same I2C bus)
  *   RTC:          PCF85063 @ 0x51 (same I2C bus)
@@ -31,7 +31,9 @@
  * NOTE: FT3168 has no ESP-IDF native driver. This board tries the FT5x06
  * driver (same FocalTech family, same 0x38 address). Validate touch on
  * hardware; write a native FT3168 driver if the register map differs.
- * Audio codec pins follow the 1.75C layout pending schematic confirmation.
+ * Audio codec pins (the AUDIO_* defines below) are from the 2.06
+ * schematic and are cross-validated by HermesGadget's independent
+ * port of this board.
  */
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -42,9 +44,9 @@
 #include "esp_lcd_touch_ft5x06.h"
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
-#include "audio_codec_gpio.h"
+#include "esp_codec_dev_defaults.h"  /* audio_codec_new_gpio (was audio_codec_gpio.h pre-1.5) */
 #include "es8311_codec.h"
-#include "es7210_codec.h"
+#include "es7210_adc.h"  /* ES7210 factory header in esp_codec_dev 1.5.x */
 #include "esp_lcd_touch.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
@@ -174,18 +176,27 @@ static const co5300_lcd_init_cmd_t s_lcd_init[] = {
 
 static esp_lcd_panel_handle_t s_panel;
 
+/* display_start returns lv_display_t*, so ESP_RETURN_ON_ERROR (which
+ * returns an esp_err_t) cannot be used inside it; log and bail with
+ * NULL instead, matching the lv_display_t* failure paths below. */
+#define DISPLAY_CHECK(expr, msg) do { \
+        esp_err_t err_ = (expr); \
+        if (err_ != ESP_OK) { \
+            ESP_LOGE(TAG, "%s: %s", msg, esp_err_to_name(err_)); \
+            return NULL; \
+        } \
+    } while (0)
+
 static lv_display_t *display_start(lv_indev_t **touch)
 {
     /* QSPI bus for CO5300. Panel must be powered (LCD_EN) before any traffic. */
     const spi_bus_config_t bus_cfg =
         CO5300_PANEL_BUS_QSPI_CONFIG(LCD_SCK, LCD_D0, LCD_D1, LCD_D2, LCD_D3,
                                      LCD_CHUNK_BYTES);
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO),
-                        TAG, "QSPI bus");
+    DISPLAY_CHECK(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO), "QSPI bus");
     const esp_lcd_panel_io_spi_config_t io_cfg =
         CO5300_PANEL_IO_QSPI_CONFIG(LCD_CS, NULL, NULL);
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_cfg, &s_io),
-                        TAG, "panel IO");
+    DISPLAY_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_cfg, &s_io), "panel IO");
 
     co5300_vendor_config_t vendor_cfg = {
         .init_cmds = s_lcd_init,
@@ -198,20 +209,19 @@ static lv_display_t *display_start(lv_indev_t **touch)
         .bits_per_pixel = 16,
         .vendor_config = &vendor_cfg,
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_co5300(s_io, &panel_cfg, &s_panel),
-                        TAG, "CO5300 panel");
+    DISPLAY_CHECK(esp_lcd_new_panel_co5300(s_io, &panel_cfg, &s_panel), "CO5300 panel");
     /* x_gap=0 initially; if image is shifted horizontally, set the 2.06"
      * x-offset here (1.75C used 6). */
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(s_panel, 0, 0), TAG, "set gap");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "display on");
+    DISPLAY_CHECK(esp_lcd_panel_set_gap(s_panel, 0, 0), "set gap");
+    DISPLAY_CHECK(esp_lcd_panel_reset(s_panel), "panel reset");
+    DISPLAY_CHECK(esp_lcd_panel_init(s_panel), "panel init");
+    DISPLAY_CHECK(esp_lcd_panel_disp_on_off(s_panel, true), "display on");
 
     /* LVGL via Meta's adapter + banded flush (fixed internal DMA buffers). */
     esp_lv_adapter_config_t adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
     adapter_cfg.task_core_id = MUSE_UI_CORE;
     adapter_cfg.task_priority = MUSE_UI_PRIORITY;
-    ESP_RETURN_ON_ERROR(esp_lv_adapter_init(&adapter_cfg), TAG, "LVGL adapter");
+    DISPLAY_CHECK(esp_lv_adapter_init(&adapter_cfg), "LVGL adapter");
     const esp_lv_adapter_display_config_t disp_cfg = {
         .panel = s_panel,
         .panel_io = s_io,
@@ -241,8 +251,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
     tp_io_cfg.dev_addr = TOUCH_ADDR;
     tp_io_cfg.scl_speed_hz = 400000;
     esp_lcd_panel_io_handle_t tp_io;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(s_i2c_bus, &tp_io_cfg, &tp_io),
-                        TAG, "touch IO");
+    DISPLAY_CHECK(esp_lcd_new_panel_io_i2c(s_i2c_bus, &tp_io_cfg, &tp_io), "touch IO");
     esp_lcd_touch_config_t tp_cfg = {
         .x_max = LCD_H_RES,
         .y_max = LCD_V_RES,
@@ -258,8 +267,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
             .mirror_y = 0,
         },
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, &s_tp),
-                        TAG, "FT3168 touch");
+    DISPLAY_CHECK(esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, &s_tp), "FT3168 touch");
     const esp_lv_adapter_touch_config_t lv_tp_cfg =
         ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, s_tp);
     *touch = esp_lv_adapter_register_touch(&lv_tp_cfg);
@@ -333,54 +341,77 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_chan, &std_cfg), TAG, "I2S TX");
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx_chan, &std_cfg), TAG, "I2S RX");
 
-    /* ES8311 speaker codec on the shared I2C bus. */
-    audio_codec_i2c_cfg_t i2c_cfg = {
-        .port = I2C_NUM_0,
-        .addr = 0x18,
-    };
+    /* Codec interfaces over the shared buses, esp_codec_dev 1.5.x API.
+     * (The first draft of this function used another API generation's
+     * factory names, config fields and a two-argument esp_codec_dev_new
+     * referencing undefined variables, plus an ES7210 address of 0x10;
+     * none of it could ever have compiled or run. Addresses below are
+     * the parts' 7-bit defaults.) The devices are returned created but
+     * unopened; muse_audio.c opens them with its sample info. */
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    audio_codec_i2s_cfg_t i2s_data_cfg = {
+        .port = I2S_NUM_0,
+        .rx_handle = rx_chan,
+        .tx_handle = tx_chan,
+    };
+    const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_data_cfg);
+    if (!gpio_if || !data_if) {
+        ESP_LOGE(TAG, "codec interface init failed");
+        return ESP_FAIL;
+    }
+
+    /* ES8311 speaker codec on the shared I2C bus. */
+    audio_codec_i2c_cfg_t es8311_i2c_cfg = {
+        .port = I2C_NUM_0,
+        .addr = ES8311_CODEC_DEFAULT_ADDR >> 1,
+        .bus_handle = s_i2c_bus,
+    };
     es8311_codec_cfg_t es8311_cfg = {
-        .ctrl_if = audio_codec_new_i2c(&i2c_cfg),
+        .ctrl_if = audio_codec_new_i2c_ctrl(&es8311_i2c_cfg),
         .gpio_if = gpio_if,
         .pa_pin = AUDIO_PA,
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
+        .use_mclk = true,
     };
-    esp_codec_dev_handle_t es8311 = es8311_codec_new(&es8311_cfg);
-    if (!es8311) {
+    const audio_codec_if_t *es8311_if = es8311_codec_new(&es8311_cfg);
+    if (!es8311_if) {
         ESP_LOGE(TAG, "ES8311 init failed");
         return ESP_FAIL;
     }
-    esp_codec_dev_sample_info_t spk_fs = {
-        .sample_rate = 16000,
-        .channel = 2,
-        .bits_per_sample = 16,
+    esp_codec_dev_cfg_t spk_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
+        .codec_if = es8311_if,
+        .data_if = data_if,
     };
-    *spk = esp_codec_dev_new(&es8311_codec_dev_cfg, &spk_fs);
+    *spk = esp_codec_dev_new(&spk_cfg);
     if (!*spk) {
         ESP_LOGE(TAG, "speaker dev failed");
         return ESP_FAIL;
     }
 
-    /* ES7210 dual-mic ADC on the shared I2C bus. */
-    i2c_cfg.addr = 0x10;  /* verify against schematic; 0x10/0x11 common */
-    es7210_codec_cfg_t es7210_cfg = {
-        .ctrl_if = audio_codec_new_i2c(&i2c_cfg),
-        .gpio_if = gpio_if,
-        .codec_mode = ESP_CODEC_DEV_WORK_MODE_ADC,
-        .mic_bias = ES7210_MIC_BIAS_2V87,
-        .mic_gain = ES7210_MIC_GAIN_30DB,
+    /* ES7210 dual-mic ADC on the shared I2C bus. Mic bias/gain are not
+     * config fields in 1.5.x; gain is applied via esp_codec_dev (see
+     * set_mic_gain) and the driver default bias is used. */
+    audio_codec_i2c_cfg_t es7210_i2c_cfg = {
+        .port = I2C_NUM_0,
+        .addr = ES7210_CODEC_DEFAULT_ADDR >> 1,
+        .bus_handle = s_i2c_bus,
     };
-    esp_codec_dev_handle_t es7210 = es7210_codec_new(&es7210_cfg);
-    if (!es7210) {
+    es7210_codec_cfg_t es7210_cfg = {
+        .ctrl_if = audio_codec_new_i2c_ctrl(&es7210_i2c_cfg),
+        .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2,
+    };
+    const audio_codec_if_t *es7210_if = es7210_codec_new(&es7210_cfg);
+    if (!es7210_if) {
         ESP_LOGE(TAG, "ES7210 init failed");
         return ESP_FAIL;
     }
-    esp_codec_dev_sample_info_t mic_fs = {
-        .sample_rate = 16000,
-        .channel = 2,
-        .bits_per_sample = 16,
+    esp_codec_dev_cfg_t mic_cfg = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN,
+        .codec_if = es7210_if,
+        .data_if = data_if,
     };
-    *mic = esp_codec_dev_new(&es7210_codec_dev_cfg, &mic_fs);
+    *mic = esp_codec_dev_new(&mic_cfg);
     if (!*mic) {
         ESP_LOGE(TAG, "mic dev failed");
         return ESP_FAIL;
