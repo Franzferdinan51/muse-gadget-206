@@ -36,15 +36,14 @@
 #include "muse_text.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
+#include "muse_theme.h"
 
 static const char *TAG = "muse_menu";
 
-#define COLOR_TEXT 0xf2efff
-#define COLOR_DIM 0x8b84a8
-#define COLOR_ACCENT 0xa77dff
-#define COLOR_SELECTED 0x2e2552
-#define COLOR_RULE 0x2a2345
-#define COLOR_DANGER 0xff5c5c
+/* Colors are Muse Gloss tokens (muse_theme.h). */
+#define COLOR_TEXT MUSE_TEXT
+#define COLOR_DIM MUSE_DIM
+#define COLOR_DANGER MUSE_DANGER
 
 /* 128 px screens want a smaller face than the 14 px every board has. */
 #if LV_FONT_MONTSERRAT_12
@@ -310,6 +309,7 @@ static void refresh(void)
         if (s_sel != s_shown_sel) {
             for (int i = 0; i < ITEM_COUNT; i++) {
                 lv_obj_set_style_bg_opa(s_rows[i], i == s_sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+                lv_obj_set_style_border_opa(s_rows[i], i == s_sel ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
             }
             /* Scroll by whole rows so none is ever cut in half. */
             if (s_sel < s_first) {
@@ -530,8 +530,7 @@ void muse_menu_build(lv_obj_t *parent, int w, int h)
     s_root = lv_obj_create(parent);
     lv_obj_remove_style_all(s_root);
     lv_obj_set_size(s_root, w, h);
-    lv_obj_set_style_bg_color(s_root, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_root, LV_OPA_COVER, 0);
+    muse_theme_backdrop(s_root);
     lv_obj_remove_flag(s_root, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_root, LV_OBJ_FLAG_HIDDEN);
 
@@ -552,12 +551,16 @@ void muse_menu_build(lv_obj_t *parent, int w, int h)
         lv_obj_remove_style_all(r);
         lv_obj_set_size(r, lv_pct(100), s_row_h);
         lv_obj_set_style_pad_hor(r, small ? 3 : 10, 0);
-        lv_obj_set_style_radius(r, small ? 3 : 8, 0);
-        lv_obj_set_style_bg_color(r, lv_color_hex(COLOR_SELECTED), 0);
+        lv_obj_set_style_radius(r, small ? 3 : MUSE_R_CARD, 0);
+        lv_obj_set_style_bg_color(r, lv_color_hex(MUSE_BUBBLE_BOT), 0);
+        lv_obj_set_style_border_side(r, LV_BORDER_SIDE_LEFT, 0);
+        lv_obj_set_style_border_width(r, 3, 0);
+        lv_obj_set_style_border_color(r, lv_color_hex(MUSE_BLUE), 0);
+        lv_obj_set_style_border_opa(r, LV_OPA_TRANSP, 0);
         lv_obj_remove_flag(r, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
         uint32_t color = i == ITEM_POWER ? COLOR_DANGER : COLOR_TEXT;
         lv_obj_align(label(r, font, color, ITEM_NAMES[i]), LV_ALIGN_LEFT_MID, 0, 0);
-        s_values[i] = label(r, font, COLOR_ACCENT, "");
+        s_values[i] = label(r, font, MUSE_DIM, "");
         lv_obj_align(s_values[i], LV_ALIGN_RIGHT_MID, 0, 0);
         s_rows[i] = r;
     }
@@ -573,7 +576,7 @@ void muse_menu_build(lv_obj_t *parent, int w, int h)
     lv_obj_t *rule = lv_obj_create(s_root);
     lv_obj_remove_style_all(rule);
     lv_obj_set_size(rule, w, 1);
-    lv_obj_set_style_bg_color(rule, lv_color_hex(COLOR_RULE), 0);
+    lv_obj_set_style_bg_color(rule, lv_color_hex(MUSE_RING_TRACK), 0);
     lv_obj_set_style_bg_opa(rule, LV_OPA_COVER, 0);
     lv_obj_align(rule, LV_ALIGN_BOTTOM_MID, 0, -hint_h);
     s_hint_down = label(s_root, font, COLOR_TEXT, "");
