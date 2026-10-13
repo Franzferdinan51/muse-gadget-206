@@ -28,9 +28,15 @@
  *   RTC:          PCF85063 @ 0x51 (same I2C bus)
  *   Buttons:      BOOT=GPIO0, PWR=side key via AXP2101
  *
- * NOTE: FT3168 has no ESP-IDF native driver. This board tries the FT5x06
- * driver (same FocalTech family, same 0x38 address). Validate touch on
- * hardware; write a native FT3168 driver if the register map differs.
+ * NOTE: FT3168 has no ESP-IDF native driver. This board uses the FT5x06
+ * driver (same FocalTech family, same 0x38 address) — hardware-proven on
+ * this exact unit by AIWatchOS: the chip answers at 0x38 on this bus
+ * alongside AXP2101 0x34, QMI8658 0x6B, PCF85063 0x51 and the codecs at
+ * 0x18 (ES8311) / 0x40 (ES7210), and raw + burst reads are clean. Known
+ * quirk from the AIWatchOS soak: the production read path intermittently
+ * returns ESP_ERR_INVALID_STATE in bursts on this shared bus (periodic
+ * co-client suspected) — treat occasional read errors as bus contention,
+ * not a dead chip.
  * Audio codec pins (the AUDIO_* defines below) are from the 2.06
  * schematic and are cross-validated by HermesGadget's independent
  * port of this board.
@@ -38,6 +44,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_co5300.h"
@@ -156,7 +163,10 @@ static void round_area(lv_event_t *e)
 /* CO5300 init sequence for 410x502 panel.
  * Adapted from Waveshare's esp32_s3_touch_amoled_1_75c BSP v3.0.0
  * (lcd_init_cmds[]). Same CO5300 die, different glass: only the address
- * windows change (0x2A/0x2B). x-offset unknown for 2.06" — validate on hw. */
+ * windows change (0x2A/0x2B). The column window is 22..431, NOT 0..409:
+ * hardware-proven on this exact unit by AIWatchOS — the visible glass
+ * starts at GRAM column 22, matching the vendor BSP (waveshare/
+ * esp32_s3_touch_amoled_2_06 v2.0.0: CASET 22..431, gap (22, 0)). */
 static const co5300_lcd_init_cmd_t s_lcd_init[] = {
     { 0xFE, (uint8_t[]){ 0x20 }, 1, 0 },   /* page select -> page 2 */
     { 0x19, (uint8_t[]){ 0x10 }, 1, 0 },   /* page-2 power/analog trim */
@@ -168,7 +178,7 @@ static const co5300_lcd_init_cmd_t s_lcd_init[] = {
     { 0x53, (uint8_t[]){ 0x20 }, 1, 0 },   /* brightness control block ON */
     { 0x51, (uint8_t[]){ 0xFF }, 1, 0 },   /* brightness = max (UI takes over) */
     { 0x63, (uint8_t[]){ 0xFF }, 1, 0 },   /* CO5300 vendor register */
-    { 0x2A, (uint8_t[]){ 0x00, 0x00, 0x01, 0x99 }, 4, 0 },  /* cols 0-409 (410px) */
+    { 0x2A, (uint8_t[]){ 0x00, 0x16, 0x01, 0xAF }, 4, 0 },  /* cols 22-431: 410px of glass */
     { 0x2B, (uint8_t[]){ 0x00, 0x00, 0x01, 0xF5 }, 4, 600 },/* rows 0-501 (502px) */
     { 0x11, NULL, 0, 600 },                /* sleep out */
     { 0x29, NULL, 0, 0 },                  /* display on */
@@ -210,12 +220,48 @@ static lv_display_t *display_start(lv_indev_t **touch)
         .vendor_config = &vendor_cfg,
     };
     DISPLAY_CHECK(esp_lcd_new_panel_co5300(s_io, &panel_cfg, &s_panel), "CO5300 panel");
-    /* x_gap=0 initially; if image is shifted horizontally, set the 2.06"
-     * x-offset here (1.75C used 6). */
+    /* Gap stays (0, 0) through init so the boot clear below addresses
+     * GRAM coordinates directly; the window moves onto the glass with
+     * set_gap(22, 0) right after (AIWatchOS-proven on this unit). */
     DISPLAY_CHECK(esp_lcd_panel_set_gap(s_panel, 0, 0), "set gap");
     DISPLAY_CHECK(esp_lcd_panel_reset(s_panel), "panel reset");
     DISPLAY_CHECK(esp_lcd_panel_init(s_panel), "panel init");
     DISPLAY_CHECK(esp_lcd_panel_disp_on_off(s_panel, true), "display on");
+
+    /* Boot clear of the full vendor GRAM span (cols 0..431 x rows
+     * 0..501) to black, mirroring AIWatchOS's display_driver: the panel
+     * wakes with stale GRAM content (a solid green field) that must not
+     * survive anywhere, the columns outside the visible window
+     * included. Banded through a small DMA buffer; the panel IO above
+     * registered no transfer-done callback, so draw_bitmap completes
+     * synchronously here. A failed clear is cosmetic only (LVGL's
+     * first flush repaints the visible window) — log, don't fail. */
+    {
+        enum { kGramCols = 432, kClearRows = 12 };
+        uint8_t *clear_buf = heap_caps_calloc(1, kGramCols * kClearRows * 2,
+                                              MALLOC_CAP_DMA);
+        if (clear_buf) {
+            for (int y = 0; y < LCD_V_RES; y += kClearRows) {
+                int y_end = y + kClearRows;
+                if (y_end > LCD_V_RES) {
+                    y_end = LCD_V_RES;
+                }
+                esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y,
+                                                          kGramCols, y_end,
+                                                          clear_buf);
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "GRAM clear band y=%d: %s", y,
+                             esp_err_to_name(err));
+                    break;
+                }
+            }
+            free(clear_buf);
+        } else {
+            ESP_LOGW(TAG, "GRAM clear skipped: no DMA memory");
+        }
+    }
+    /* Every flush from here on lands at CASET 22..431 — on the glass. */
+    DISPLAY_CHECK(esp_lcd_panel_set_gap(s_panel, 22, 0), "set gap 22");
 
     /* LVGL via Meta's adapter + banded flush (fixed internal DMA buffers). */
     esp_lv_adapter_config_t adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
