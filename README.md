@@ -13,8 +13,8 @@ Based on Meta's official
 |---|---|
 | MCU | ESP32-S3R8, 240 MHz, 8 MB octal PSRAM, 32 MB flash |
 | Display | 2.06" AMOLED, 410x502, CO5300 over QSPI (CS=12, SCK=11, D0-D3=4-7, RST=8, EN=13) |
-| Touch | FT3168 capacitive, I2C 0x38 (SDA=8, SCL=9, INT=21) |
-| Audio | ES8311 + ES7210, dual mics, speaker (pins pending schematic confirmation) |
+| Touch | FT3168 capacitive, I2C 0x38 (SDA=15, SCL=14, INT=38, RST=9) |
+| Audio | ES8311 + ES7210, dual mics, speaker (MCLK=16, BCLK=41, WS=45, DOUT=42, DIN=40, PA=46) |
 | Power | AXP2101 PMIC, 3.7V MX1.25 LiPo header (battery included, fits in case) |
 | Extras | PCF85063 RTC, QMI8658 6-axis IMU, TF card slot, watch straps |
 
@@ -22,8 +22,18 @@ Based on Meta's official
 
 ```bash
 cd esp32
-idf.py build -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;devices/sdkconfig.muse-waveshare-s3-206"
+IDF_TARGET=esp32s3 idf.py build -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-waveshare-s3-206"
 ```
+
+> **Requires ESP-IDF 6.0.1.** The Muse component requires IDF >= 5.5
+> (`esp32/components/muse/idf_component.yml`) and the firmware is built
+> and tested against 6.0.1 (see `esp32/README.md`). Older toolchains
+> (e.g. 5.3.x) fail in the dependency solver before anything compiles.
+> The `IDF_TARGET` prefix and the shared `devices/sdkconfig.muse`
+> fragment are both required: without the fragment the LVGL config is
+> incomplete (the 2.06 overlay sets two SW draw units, which need the
+> fragment's FreeRTOS OS setting), and IDF 6.0.1 otherwise guesses the
+> target as esp32c5 from `sdkconfig.defaults`.
 
 Or select **Waveshare ESP32-S3-Touch-AMOLED-2.06** in `idf.py menuconfig`
 under Component config -> Muse -> Board.
@@ -59,7 +69,7 @@ Additional Muse-invokable commands for the watch form factor:
 | `display.show_card` | `title`, `body`, `ttl_s` | Hermes-style card overlay, auto-dismiss |
 | `display.show_animation` | — | Clear image/card back to neutral face |
 | `device.health` | — | Battery %, charging, model, firmware, status |
-| `companion.set_display` | `brightness` (0-100), `theme`, `keep_screen_on` | Remote display prefs |
+| `companion.set_display` | `brightness` (0-100), `theme`, `keep_screen_on` | Remote display prefs. `keep_screen_on` drives the auto-sleep setting; `theme` is accepted but ignored — the watch UI has a single dark theme by design |
 | `image.start` | `width`, `height` | Begin streamed image upload |
 | `image.data` | `rows` (base64 RGB565), `y` | Stream image rows |
 | `image.end` | — | Finish streamed image |
