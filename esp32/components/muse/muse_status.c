@@ -31,6 +31,7 @@
 #include "lvgl.h"
 
 #include "muse_board.h"
+#include "muse_theme.h"
 
 #define STATUS_MAX_CHARS 4000
 #define CARD_MAX_TITLE 120
@@ -68,6 +69,7 @@ static void status_create_ui(lv_timer_t *t) {
     lv_label_set_long_mode(s_status_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_status_label, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_label_set_text(s_status_label, s_status);
 }
@@ -86,19 +88,26 @@ static void card_create_ui(void) {
     s_card = lv_obj_create(scr);
     lv_obj_set_size(s_card, 360, 300);
     lv_obj_align(s_card, LV_ALIGN_CENTER, 0, -40);
-    lv_obj_set_style_radius(s_card, 16, 0);
+    lv_obj_set_style_radius(s_card, MUSE_R_DIALOG, 0);
+    muse_theme_bubble(s_card);
     lv_obj_set_style_bg_opa(s_card, LV_OPA_90, 0);
     lv_obj_add_flag(s_card, LV_OBJ_FLAG_CLICKABLE);
+    /* The gloss band (tokens G2), inset 12px a side; the labels are
+     * created after it and draw over it. */
+    lv_obj_set_width(muse_theme_gloss(s_card), 360 - 24);
 
     s_card_title_lbl = lv_label_create(s_card);
     lv_obj_set_width(s_card_title_lbl, 320);
     lv_label_set_long_mode(s_card_title_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_card_title_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_card_title_lbl, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_set_style_text_align(s_card_title_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_card_title_lbl, LV_ALIGN_TOP_MID, 0, 16);
     lv_label_set_text(s_card_title_lbl, s_card_title);
 
     s_card_body_lbl = lv_label_create(s_card);
+    lv_obj_set_style_text_font(s_card_body_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_card_body_lbl, lv_color_hex(MUSE_TEXT), 0);
     lv_obj_set_width(s_card_body_lbl, 320);
     lv_label_set_long_mode(s_card_body_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_card_body_lbl, LV_TEXT_ALIGN_CENTER, 0);
