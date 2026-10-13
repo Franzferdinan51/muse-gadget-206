@@ -326,7 +326,7 @@ static lv_display_t *display_start(lv_indev_t **touch)
 
 static bool display_lock(int timeout_ms)
 {
-    return true;  /* stub until display_start is complete */
+    return esp_lv_adapter_lock(timeout_ms) == ESP_OK;
 }
 
 static void set_brightness(int pct)
@@ -487,7 +487,7 @@ static const muse_board_t s_board = {
     .init = init,
     .display_start = display_start,
     .display_lock = display_lock,
-    .display_unlock = NULL,
+    .display_unlock = esp_lv_adapter_unlock,
     .set_brightness = set_brightness,
     .panel_sleep = panel_sleep,
     .display_pause = NULL,
