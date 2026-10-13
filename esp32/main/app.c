@@ -58,6 +58,8 @@
 #include "muse_status.h"
 #include "muse_pmu.h"
 #include "muse_board.h"
+#include "muse_settings.h"
+#include "muse_ui.h"
 #include "mbedtls/base64.h"
 #include "button.h"
 #include "tunnel_netif.h"
@@ -1809,7 +1811,6 @@ static cJSON *list_vms_command(void) {
 static cJSON *bug_report_command(
     const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
-    static int s_stream_w, s_stream_h, s_stream_y;
     cJSON *async = cJSON_CreateObject();
     if (!async || !cJSON_AddBoolToObject(async, "_async", true)) {
         cJSON_Delete(async);
@@ -1843,6 +1844,10 @@ static cJSON *bug_report_command(
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
+    /* Streamed-image state for the image.start/data/end handlers
+     * below. (This declaration used to sit inside bug_report_command,
+     * where these handlers could not see it.) */
+    static int s_stream_w, s_stream_h, s_stream_y;
     if (strcmp(command, "device.list_vms") == 0) {
         return list_vms_command();
     }
@@ -1903,20 +1908,12 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(result, "ok", true);
         return result;
     }
-    /* 2.06" watch: device health (battery, charging, model, version). */
-    if (strcmp(command, "device.health") == 0) {
-        cJSON *result = cJSON_CreateObject();
-        muse_power_t pwr;
-        if (muse_pmu_read_power(&pwr) == ESP_OK) {
-            cJSON_AddNumberToObject(result, "battery_pct", pwr.battery_pct);
-            cJSON_AddBoolToObject(result, "charging", pwr.charging);
-            cJSON_AddNumberToObject(result, "battery_mv", pwr.battery_mv);
-        }
-        cJSON_AddStringToObject(result, "model", "Waveshare ESP32-S3-Touch-AMOLED-2.06");
-        cJSON_AddStringToObject(result, "firmware", "206-1.0.0");
-        cJSON_AddStringToObject(result, "status", muse_status_get());
-        return result;
-    }
+    /* device.health is deliberately NOT handled here: the control layer
+     * (noise_control.cpp, send_device_health) intercepts it before this
+     * callback runs and returns the generic Link health envelope merged
+     * with this watch's model + status text. A handler here was
+     * unreachable dead code (and carried a hard-coded firmware string),
+     * so it was removed rather than left to rot. */
     /* 2.06" watch: remote display preferences. */
     if (strcmp(command, "companion.set_display") == 0) {
         cJSON *brightness = cJSON_GetObjectItem(params, "brightness");
@@ -1928,10 +1925,31 @@ static cJSON *on_ws_command(
             if (pct > 100) pct = 100;
             if (muse_board && muse_board->set_brightness) muse_board->set_brightness(pct);
         }
-        /* theme and keep_screen_on are accepted for compat; the watch
-         * uses a single dark theme and manages sleep via the PMU. */
-        (void)theme;
-        (void)keep_on;
+        /* keep_screen_on is implemented for real: it drives the
+         * persisted auto-sleep setting (muse_settings_sleep_s, where
+         * 0 = never sleep, polled by the input/idle path). Turning it
+         * on remembers the timeout in effect and sets "never";
+         * turning it off restores the remembered timeout. */
+        if (cJSON_IsBool(keep_on)) {
+            static int s_prev_sleep_s = -1;
+            if (cJSON_IsTrue(keep_on)) {
+                if (s_prev_sleep_s < 0) {
+                    s_prev_sleep_s = muse_settings_sleep_s();
+                }
+                muse_settings_set_sleep_s(0);
+            } else if (s_prev_sleep_s >= 0) {
+                muse_settings_set_sleep_s(s_prev_sleep_s);
+                s_prev_sleep_s = -1;
+            }
+        }
+        /* theme is accepted but intentionally not applied: the watch
+         * UI ships a single dark theme by design. Log the request
+         * instead of silently pretending it took effect. */
+        if (cJSON_IsString(theme) && theme->valuestring) {
+            ESP_LOGW(TAG, "companion.set_display: theme \"%s\" ignored "
+                          "(single dark theme by design)",
+                     theme->valuestring);
+        }
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
         return result;

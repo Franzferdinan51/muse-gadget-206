@@ -44,6 +44,7 @@ extern "C" {
 #if CONFIG_MUSE_ENABLED
 extern "C" {
 #include "muse_state.h"
+#include "muse_status.h"
 }
 #endif
 }
@@ -1250,7 +1251,9 @@ static char *build_register_json(void) {
     add_command(commands, "device.health",
                 "Report basic Link health, including battery level (percent), "
                 "voltage, and whether it is charging or on USB power; each is "
-                "null when the device has no battery or can't measure it",
+                "null when the device has no battery or can't measure it. "
+                "On Muse watches it also includes the model and the "
+                "current status text",
                 nullptr, nullptr);
 #if CONFIG_HOMEHUB_TUNNEL
     add_command(commands, "device.discover",
@@ -1344,6 +1347,61 @@ static char *build_register_json(void) {
     }
 #endif
 
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+    // 2.06" watch commands answered by the app callback (on_ws_command in
+    // app.c). They were handled but never registered, so the platform
+    // could not discover them; register everything the handler answers.
+    cJSON *status_required = cJSON_CreateObject();
+    cJSON_AddItemToObject(status_required, "text",
+                          string_param("Status text to show below the face "
+                                       "(up to 4000 chars)."));
+    add_command(commands, "companion.set_status",
+                "Set the watch's persistent status line, shown as a "
+                "caption below the face until replaced.",
+                status_required, nullptr);
+    cJSON *status_alias_required = cJSON_CreateObject();
+    cJSON_AddItemToObject(status_alias_required, "text",
+                          string_param("Status text to show below the face "
+                                       "(up to 4000 chars)."));
+    add_command(commands, "pocket.set_status",
+                "Alias for companion.set_status.",
+                status_alias_required, nullptr);
+    cJSON *card_optional = cJSON_CreateObject();
+    cJSON_AddItemToObject(card_optional, "title",
+                          string_param("Card title."));
+    cJSON_AddItemToObject(card_optional, "body",
+                          string_param("Card body text."));
+    cJSON *ttl_param = cJSON_CreateObject();
+    cJSON_AddStringToObject(ttl_param, "type", "integer");
+    cJSON_AddStringToObject(ttl_param, "description",
+                            "Seconds before the card dismisses itself; "
+                            "0 or omitted keeps it until tapped.");
+    cJSON_AddItemToObject(card_optional, "ttl_s", ttl_param);
+    add_command(commands, "display.show_card",
+                "Show a title/body card overlay on the watch face.",
+                nullptr, card_optional);
+    cJSON *display_optional = cJSON_CreateObject();
+    cJSON *bright_param = cJSON_CreateObject();
+    cJSON_AddStringToObject(bright_param, "type", "integer");
+    cJSON_AddStringToObject(bright_param, "description",
+                            "Screen brightness, 0 to 100.");
+    cJSON_AddItemToObject(display_optional, "brightness", bright_param);
+    cJSON_AddItemToObject(display_optional, "theme",
+                          string_param("Accepted but ignored: the watch UI "
+                                       "has a single dark theme."));
+    cJSON *keep_on_param = cJSON_CreateObject();
+    cJSON_AddStringToObject(keep_on_param, "type", "boolean");
+    cJSON_AddStringToObject(keep_on_param, "description",
+                            "true keeps the screen awake (auto-sleep "
+                            "off); false restores the auto-sleep timeout "
+                            "that was in effect before.");
+    cJSON_AddItemToObject(display_optional, "keep_screen_on", keep_on_param);
+    add_command(commands, "companion.set_display",
+                "Set remote display preferences on the watch "
+                "(brightness, keep-screen-on).",
+                nullptr, display_optional);
+#endif
+
 #if CONFIG_HOMEHUB_VOICE
     cJSON *volume_optional = cJSON_CreateObject();
     cJSON *volume_param = cJSON_CreateObject();
@@ -1392,15 +1450,61 @@ static char *build_register_json(void) {
                     ota_required, ota_optional);
     }
 
+    // Streamed image upload (on_ws_command in app.c): an alternative to
+    // display.draw_url that pushes raw RGB565 rows in chunks.
+    cJSON *image_start_required = cJSON_CreateObject();
+    cJSON *img_w = cJSON_CreateObject();
+    cJSON_AddStringToObject(img_w, "type", "integer");
+    cJSON_AddStringToObject(img_w, "description", "Image width in pixels.");
+    cJSON_AddItemToObject(image_start_required, "width", img_w);
+    cJSON *img_h = cJSON_CreateObject();
+    cJSON_AddStringToObject(img_h, "type", "integer");
+    cJSON_AddStringToObject(img_h, "description", "Image height in pixels.");
+    cJSON_AddItemToObject(image_start_required, "height", img_h);
+    add_command(commands, "image.start",
+                "Begin a streamed image upload: declare the image size, "
+                "then send image.data rows and finish with image.end.",
+                image_start_required, nullptr);
+    cJSON *image_data_required = cJSON_CreateObject();
+    cJSON_AddItemToObject(image_data_required, "rows",
+                          string_param("Base64-encoded RGB565 rows "
+                                       "(high byte first)."));
+    cJSON *image_data_optional = cJSON_CreateObject();
+    cJSON *img_y = cJSON_CreateObject();
+    cJSON_AddStringToObject(img_y, "type", "integer");
+    cJSON_AddStringToObject(img_y, "description",
+                            "Row offset to draw at; by default continues "
+                            "from the previous image.data chunk.");
+    cJSON_AddItemToObject(image_data_optional, "y", img_y);
+    add_command(commands, "image.data",
+                "Send one chunk of streamed image rows.",
+                image_data_required, image_data_optional);
+    add_command(commands, "image.end",
+                "Finish a streamed image upload.",
+                nullptr, nullptr);
+
+    // The management commands (device.list_vms, device.set_vm,
+    // device.reset_vm, device.unpair) are deliberately NOT advertised
+    // here: they stay handled by on_ws_command in app.c but out of the
+    // registration schema, per the transport contract in
+    // tests/test_link_transport_contract.py.
+#if CONFIG_HOMEHUB_SUPPORT_BUG_REPORT
+    add_command(commands, "bug.report",
+                "Collect device diagnostics and upload a bug report.",
+                nullptr, nullptr);
+#endif
+
     cJSON_AddItemToObject(params, "commands_v2", commands);
     cJSON_AddItemToObject(root, "params", params);
 
     // cJSON_PrintUnformatted grows its buffer by doubling, holding the old
     // one each time, so ~2 KB of JSON briefly needs ~6 KB of byte-addressable
     // heap. Right after the handshake there is often not that much, so print
-    // into one buffer sized to fit instead.
+    // into one buffer sized to fit instead. The ceiling was raised from
+    // 8 KB to 16 KB when the 2.06" watch commands were registered: the
+    // loop only allocates as much as the print actually needs.
     char *json = nullptr;
-    for (int size = 2048; size <= 8192 && !json; size += 512) {
+    for (int size = 2048; size <= 16384 && !json; size += 512) {
         json = (char *)malloc(size);
         if (!json) break;
         if (!cJSON_PrintPreallocated(root, json, size, false)) {
@@ -1523,6 +1627,22 @@ static void send_device_health(
     cJSON_AddItemToObject(metrics, "usb_power",
                           usb_power ? usb_power : cJSON_CreateNull());
     cJSON_AddItemToObject(health, "metrics", metrics);
+#if CONFIG_MUSE_ENABLED
+    // Merge in the watch-specific fields. device.health used to have a
+    // second, watch-only handler in app.c (battery/model/status) that
+    // this interception shadowed, leaving it dead; that handler was
+    // removed and its fields folded in here, so the invoke path returns
+    // one merged health payload. The firmware version below comes from
+    // the app descriptor, the same source link.register reports.
+#if CONFIG_MUSE_BOARD_WAVESHARE_S3_206
+    cJSON_AddStringToObject(health, "model",
+                            "Waveshare ESP32-S3-Touch-AMOLED-2.06");
+#endif
+    const char *status_text = muse_status_get();
+    if (status_text && status_text[0]) {
+        cJSON_AddStringToObject(health, "status", status_text);
+    }
+#endif
     if (wifi_ssid[0]) {
         cJSON_AddStringToObject(health, "network_ssid", wifi_ssid);
     }
