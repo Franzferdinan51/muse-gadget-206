@@ -43,6 +43,7 @@
 #include "muse_settings_ui.h"
 #include "muse_state.h"
 #include "muse_text.h"
+#include "muse_theme.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
@@ -63,13 +64,13 @@ static const char *TAG = "muse_ui";
 #define SPEAKER_GROW_PX 8       /* how much the speaker button swells while held */
 #define SPEAKER_HOLD_MS 400     /* LVGL's long press */
 
-#define COLOR_DIM 0x8b84a8
-#define COLOR_CAPTION 0xd8d2ff
-#define COLOR_RING_BG 0x140f22
-#define COLOR_METER_OFF 0x1d1733
-#define COLOR_ACCENT 0xa77dff
-#define COLOR_DOT_OFF 0x3a3358
-#define COLOR_LIT 0xf2efff
+/* Colors are Muse Gloss tokens (muse_theme.h). The state accent itself
+ * comes from muse_pixel_accent() — the avatar's canonical schemes. */
+#define COLOR_DIM MUSE_DIM
+#define COLOR_CAPTION MUSE_CAPTION
+#define COLOR_RING_BG MUSE_RING_TRACK
+#define COLOR_METER_OFF MUSE_FAINT /* meter off-segments (tokens section 3) */
+#define COLOR_LIT MUSE_TEXT
 #define SETTINGS_TICK_S 0.25f
 
 /* Text on 128 px screens, as in the button menu (muse_menu.c). */
@@ -104,6 +105,7 @@ static lv_obj_t *s_pair_hint;
 static lv_obj_t *s_canvas;
 static lv_obj_t *s_mic_icon;
 static lv_obj_t *s_ring;
+static lv_obj_t *s_gloss;   /* the bezel's gloss arc (tokens G7) */
 static lv_obj_t *s_bar;     /* compact layout's stand-in for the ring */
 static lv_obj_t *s_state_lbl;
 static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the next one */
@@ -480,9 +482,14 @@ static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t co
 
 static void show_speaker(bool on)
 {
-    /* Off is the one that stands out, like a lit flashlight button. */
-    lv_obj_set_style_bg_color(s_speaker, lv_color_hex(on ? COLOR_METER_OFF : COLOR_LIT), 0);
-    lv_obj_set_style_text_color(s_speaker_icon, lv_color_hex(on ? COLOR_DIM : 0x000000), 0);
+    /* Off is the one that stands out, like a lit flashlight button: a
+     * filled blue bubble with a mist icon. On is a quiet surface bubble. */
+    if (on) {
+        muse_theme_bubble(s_speaker);
+    } else {
+        muse_theme_filled(s_speaker);
+    }
+    lv_obj_set_style_text_color(s_speaker_icon, lv_color_hex(on ? COLOR_DIM : MUSE_MIST), 0);
     lv_label_set_text(s_speaker_icon, on ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
     s_shown_speaker = on;
 }
@@ -792,22 +799,23 @@ static void on_ring_draw(lv_event_t *e)
 static void build_screen(void)
 {
     lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    muse_theme_backdrop(scr);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *face = scr;
     if (muse_board->touch) {
         /* Swipe left from Muse for settings. */
         s_tv = lv_tileview_create(scr);
-        lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
+        muse_theme_backdrop(s_tv);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
         s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
         s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        /* The backdrop gradient shows through the tiles. */
+        lv_obj_set_style_bg_opa(s_face, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(s_settings, LV_OPA_TRANSP, 0);
         face = s_face;
     }
 
@@ -828,6 +836,20 @@ static void build_screen(void)
         lv_obj_set_style_arc_width(s_ring, 6, LV_PART_INDICATOR);
         lv_obj_set_style_arc_rounded(s_ring, false, LV_PART_INDICATOR);
         lv_obj_add_event_cb(s_ring, on_ring_draw, LV_EVENT_DRAW_MAIN | LV_EVENT_PREPROCESS, NULL);
+
+        /* Bezel gloss (tokens G7): a white highlight arc across the top of
+         * the ring, 2px at 60% — chrome, present in every state. */
+        s_gloss = lv_arc_create(face);
+        lv_obj_set_size(s_gloss, d - 2, d - 2);
+        lv_obj_center(s_gloss);
+        lv_arc_set_bg_angles(s_gloss, 207, 297);
+        lv_obj_remove_style(s_gloss, NULL, LV_PART_KNOB);
+        lv_obj_remove_flag(s_gloss, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(s_gloss, 2, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(s_gloss, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(s_gloss, 153, LV_PART_MAIN);
+        lv_obj_set_style_arc_rounded(s_gloss, true, LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(s_gloss, LV_OPA_TRANSP, LV_PART_INDICATOR);
     }
 
     /*
@@ -858,6 +880,9 @@ static void build_screen(void)
         /* The canvas's black corners reach the bezel; keep the ring on top. */
         lv_obj_move_foreground(s_ring);
     }
+    if (s_gloss) {
+        lv_obj_move_foreground(s_gloss);
+    }
     build_button_icons(face);
 
     /* Status line: connectivity icons + power. */
@@ -875,7 +900,7 @@ static void build_screen(void)
 
     /* The compact layout leaves the state to the avatar and the caption,
      * unless the screen is tall enough to fit it in small type above Muse. */
-    s_state_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, 0xffffff);
+    s_state_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, MUSE_TEXT_NUM);
     lv_obj_set_style_text_letter_space(s_state_lbl, s_small ? 1 : 2, 0);
     lv_obj_align(s_state_lbl, LV_ALIGN_TOP_MID, 0, s_small ? 22 : 40 + s_dy);
     lv_obj_set_flag(s_state_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
@@ -897,7 +922,7 @@ static void build_screen(void)
         lv_obj_set_size(s_caption_lbl, s_w, 2 * 8 + 2 + 4);
         lv_obj_set_style_pad_ver(s_caption_lbl, 2, 0);
         lv_obj_set_style_text_line_space(s_caption_lbl, 2, 0);
-        lv_obj_set_style_bg_color(s_caption_lbl, lv_color_black(), 0);
+        lv_obj_set_style_bg_color(s_caption_lbl, lv_color_hex(MUSE_INK), 0);
         lv_obj_set_style_bg_opa(s_caption_lbl, LV_OPA_70, 0);
         lv_label_set_long_mode(s_caption_lbl, LV_LABEL_LONG_MODE_DOTS);
         /* Touch screens need the caption above the navigation dots too. */
@@ -929,6 +954,7 @@ static void build_screen(void)
         lv_obj_remove_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_size(seg, METER_SEG_PX, METER_SEG_PX);
         lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(seg, 3, 0);
         lv_obj_set_style_bg_color(seg, lv_color_hex(COLOR_METER_OFF), 0);
         int x = -span / 2 + i * (METER_SEG_PX + METER_GAP_PX) + METER_SEG_PX / 2;
         lv_obj_align(seg, LV_ALIGN_CENTER, x, meter_y);
@@ -1027,7 +1053,7 @@ static void build_overlays(void)
         lv_obj_set_size(d, 8, 8);
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
+        lv_obj_set_style_bg_color(d, lv_color_hex(MUSE_FAINT), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
         s_dots[i] = d;
@@ -1043,11 +1069,8 @@ static void build_overlays(void)
     s_camera_hint = lv_btn_create(scr);
     lv_obj_set_size(s_camera_hint, 244, 46);
     lv_obj_align(s_camera_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
-    lv_obj_set_style_bg_color(s_camera_hint, lv_color_hex(0x201a35), 0);
-    lv_obj_set_style_bg_opa(s_camera_hint, LV_OPA_90, 0);
-    lv_obj_set_style_border_color(s_camera_hint, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_border_width(s_camera_hint, 2, 0);
-    lv_obj_set_style_radius(s_camera_hint, 18, 0);
+    muse_theme_filled(s_camera_hint);
+    lv_obj_set_style_radius(s_camera_hint, MUSE_R_CARD, 0);
     lv_obj_add_flag(s_camera_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *hint_text = lv_label_create(s_camera_hint);
     lv_label_set_text(hint_text, "TAP TO TAKE PHOTO");
@@ -1066,16 +1089,14 @@ static void build_overlays(void)
     lv_obj_set_style_pad_ver(s_pair, s_small ? 10 : 18, 0);
     lv_obj_set_style_pad_hor(s_pair, s_small ? 6 : 16, 0);
     lv_obj_set_style_pad_row(s_pair, s_small ? 4 : 10, 0);
-    lv_obj_set_style_radius(s_pair, s_small ? 10 : 24, 0);
-    lv_obj_set_style_bg_opa(s_pair, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_pair, lv_color_hex(0x1a1530), 0);
-    lv_obj_set_style_border_color(s_pair, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_border_width(s_pair, 2, 0);
+    lv_obj_set_style_radius(s_pair, s_small ? MUSE_R_CHIP : MUSE_R_DIALOG, 0);
+    muse_theme_bubble(s_pair);
+    lv_obj_set_width(muse_theme_gloss(s_pair), (s_small ? s_w - 8 : 300) - 24);
     lv_obj_remove_flag(s_pair, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_pair, LV_OBJ_FLAG_HIDDEN);
     s_pair_title = make_label(s_pair, font_pick(&lv_font_montserrat_20, FONT_COMPACT), COLOR_LIT);
     lv_label_set_text(s_pair_title, "Pairing code");
-    s_pair_code = make_label(s_pair, font_pick(&lv_font_montserrat_28, &lv_font_montserrat_20), COLOR_ACCENT);
+    s_pair_code = make_label(s_pair, font_pick(&lv_font_montserrat_28, &lv_font_montserrat_20), MUSE_BOOT_ACCENT);
     lv_obj_set_style_text_letter_space(s_pair_code, s_small ? 2 : 6, 0);
     s_pair_hint = make_label(s_pair, font_pick(&lv_font_montserrat_14, FONT_COMPACT), COLOR_DIM);
     lv_label_set_text(s_pair_hint, s_small ? "Enter on phone" : "Enter it on your phone");
@@ -1184,7 +1205,7 @@ static void update_chrome(float now)
         int shown = page * 2 + subpage;
         if (shown != s_shown_page) {
             for (int i = 0; i < 2; i++) {
-                lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
+                lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? MUSE_BLUE : MUSE_FAINT), 0);
                 lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
             }
             s_shown_page = shown;
@@ -1206,7 +1227,7 @@ static void update_chrome(float now)
     const char *ble = b.state != MUSE_BLE_OFF ? LV_SYMBOL_BLUETOOTH : "";
     if (strcmp(ble, lv_label_get_text(s_ble_icon)) != 0) {
         lv_label_set_text(s_ble_icon, ble);
-        lv_obj_set_style_text_color(s_ble_icon, lv_color_hex(b.state == MUSE_BLE_CONNECTED ? COLOR_ACCENT : COLOR_DIM), 0);
+        lv_obj_set_style_text_color(s_ble_icon, lv_color_hex(b.state == MUSE_BLE_CONNECTED ? MUSE_OK : COLOR_DIM), 0);
     }
 
     /* Paired, the name has done its job (picking this one out in the Muse
