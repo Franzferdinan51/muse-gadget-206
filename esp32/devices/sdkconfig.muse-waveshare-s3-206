@@ -65,3 +65,13 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # actually slept, and how long each power lock kept the chip awake.
 CONFIG_PM_LIGHT_SLEEP_CALLBACKS=y
 CONFIG_PM_PROFILING=y
+# Console on USB-Serial-JTAG. This board's only user-accessible serial
+# is the S3's native USB — UART0 is not broken out — so the primary
+# console (logs and the built-in command console) must live on the JTAG
+# port; a UART0 console makes the device silent on the bench (the same
+# trap AIWatchOS fixed on this unit). Secondary console off: one port,
+# one owner.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
