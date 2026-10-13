@@ -90,7 +90,7 @@
  * The UI's one voice: Montserrat Medium baked into the firmware
  * (components/muse/fonts/, tools/muse/gen_fonts.sh), 4bpp AA, the
  * section 6 charset plus the LV_SYMBOL symbol set. LVGL's built-in
- * Montserrat is not compiled for Muse boards, and unscii survives only
+ * Montserrat is out of the image, and unscii survives only
  * as LVGL's default font -- the fallback a widget gets if it forgets to
  * set one. Every Muse label sets its font from here. */
 LV_FONT_DECLARE(muse_font_12)
