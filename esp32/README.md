@@ -247,7 +247,7 @@ A few things worth knowing:
   `CONFIG_HOMEHUB_NVS_ENCRYPTION` in `idf.py menuconfig` (under "ESP32 Device
   SDK"). The encryption key is derived from an HMAC key in eFuse, which is
   generated automatically on first boot if the eFuse block is available.
-- Builds are version `999.0.0`. Over-the-air updates are off by default; the
+- Builds are version `1.0.0`, taken from `version.txt`. Over-the-air updates are off by default; the
   boards that run the full on-screen UI turn them on. Change it with
   `CONFIG_HOMEHUB_OTA_ENABLED` in `idf.py menuconfig`, and set a version with
   `idf.py -DPROJECT_VER=1.0.0 build`.

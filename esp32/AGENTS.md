@@ -416,7 +416,7 @@ The device still needs to be paired once for its token.
   TCP buffer sizes or cJSON nesting limit.
 - Edit per-build settings with `idf.py -B <dir> menuconfig` (under "ESP32
   Device SDK"). Don't commit a generated `sdkconfig`: it's gitignored for a reason.
-- OTA is off by default (`CONFIG_HOMEHUB_OTA_ENABLED=n`, version `999.0.0`),
+- OTA is off by default (`CONFIG_HOMEHUB_OTA_ENABLED=n`, version `1.0.0` from `version.txt`),
   except on boards with the full UI. Set a version with `-DPROJECT_VER=1.0.0` or
   `version.txt`.
 - Don't move offsets in `partitions.csv`. `prod_data` and `prod_bak` are fixed
