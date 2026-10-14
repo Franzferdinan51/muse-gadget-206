@@ -1453,6 +1453,12 @@ static bool update_sleep(void)
                 target = s_preview_brightness;
             }
         }
+        if (muse_state_power_saving()) {
+            int cap = muse_state_power_critical() ? 25 : 40;
+            if (target > cap) {
+                target = cap;
+            }
+        }
         apply_brightness(target);
     }
     return s_dark;

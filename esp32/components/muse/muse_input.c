@@ -377,6 +377,11 @@ static void check_sleep(void)
         return;
     }
     int after = muse_settings_sleep_s();
+    if (muse_state_power_critical()) {
+        after = after && after < 10 ? after : 10;
+    } else if (muse_state_power_saving()) {
+        after = after && after < 20 ? after : 20;
+    }
     float mode_t;
     if (after && !muse_state_asleep() && muse_state_mode(&mode_t) == MUSE_MODE_IDLE
         && muse_state_idle_secs() > after) {
@@ -384,21 +389,71 @@ static void check_sleep(void)
     }
 }
 
-static void set_cpu_low(bool low)
+/* CPU power profiles. FULL is the shipping awake behaviour (pinned
+ * at max - the display pipeline wants the latency), LOW is the deep
+ * rest (crystal clock + light sleep), SAVE caps the clock at 80 MHz
+ * while the Low Power policy is active. */
+enum { PROF_FULL = 0, PROF_LOW, PROF_SAVE };
+static int s_profile = -1;
+
+static void set_cpu_profile(int profile)
 {
 #if CONFIG_PM_ENABLE
+    if (profile == s_profile) {
+        return;
+    }
     esp_pm_config_t pm = {
-        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
-        .min_freq_mhz = low ? CONFIG_XTAL_FREQ : CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
-        .light_sleep_enable = low,
+        .max_freq_mhz = profile == PROF_SAVE ? 80 : CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = profile == PROF_FULL ? CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ
+                                             : CONFIG_XTAL_FREQ,
+        .light_sleep_enable = profile == PROF_LOW,
     };
     esp_err_t err = esp_pm_configure(&pm);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "power management: %s", esp_err_to_name(err));
+        return;
     }
+    s_profile = profile;
 #else
-    (void)low;
+    (void)profile;
 #endif
+}
+
+/* Low Power policy (Settings > Power > Power mode; MDB
+ * settings set power_mode auto|on|off). AUTO latches on at <=25%
+ * battery and off at >=35% or on USB power; ON always saves; OFF
+ * never does - except a critical battery (<=8%) forces saving in
+ * every mode. While saving: brightness is capped (muse_ui), the
+ * screen sleeps sooner (check_sleep), Wi-Fi rests between beacons
+ * (muse_voice) and the CPU is capped (update_power). */
+static bool eval_power_saving(void)
+{
+    static bool latched;
+    muse_power_t p = muse_state_power();
+    bool batt = muse_state_on_battery();
+    int pct = p.battery_pct;
+    bool saving;
+    switch (muse_settings_power_mode()) {
+    case MUSE_POWER_ON:
+        saving = true;
+        break;
+    case MUSE_POWER_OFF:
+        saving = batt && pct >= 0 && pct <= 8;
+        break;
+    default:   /* MUSE_POWER_AUTO */
+        if (!batt || pct < 0) {
+            latched = false;
+        } else if (pct <= 25) {
+            latched = true;
+        } else if (pct >= 35) {
+            latched = false;
+        }
+        saving = latched;
+        break;
+    }
+    muse_state_set_power_saving(saving);
+    muse_state_set_power_critical(saving && batt && pct >= 0 && pct <= 8);
+    return saving;
 }
 
 /*
@@ -414,16 +469,21 @@ static bool update_power(void)
     static bool paused;
     bool pause = muse_board->display_pause && muse_state_on_battery() && muse_state_asleep()
                  && muse_ui_dark() && muse_voice_resting();
+    bool saving = eval_power_saving();
     bool want_low = pause && !muse_console_host();
-    if (pause == paused && want_low == s_cpu_low) {
+    /* On a USB console host the CPU stays at full speed in every
+     * profile (bench doctrine, as for the deep rest below); the
+     * saving policy's other effects still engage. */
+    int profile = want_low ? PROF_LOW
+                  : saving && !muse_console_host() ? PROF_SAVE
+                                                   : PROF_FULL;
+    if (pause == paused && want_low == s_cpu_low && profile == s_profile) {
         return paused;
     }
     if (pause && !paused) {
         muse_board->display_pause(true);
     }
-    if (want_low != s_cpu_low) {
-        set_cpu_low(want_low);
-    }
+    set_cpu_profile(profile);
     if (!pause && paused) {
         muse_board->display_pause(false);
     }
@@ -431,7 +491,8 @@ static bool update_power(void)
     s_cpu_low = want_low;
     ESP_LOGI(TAG, "%s", s_cpu_low ? "low power: display paused"
                         : paused  ? "display paused (USB host: CPU at full speed)"
-                                  : "full power");
+                        : profile == PROF_SAVE ? "power saving: CPU capped, radio resting"
+                                               : "full power");
     return paused;
 }
 

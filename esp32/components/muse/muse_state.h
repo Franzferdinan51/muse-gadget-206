@@ -92,6 +92,14 @@ bool muse_state_asleep(void);
 void muse_state_wait_awake(uint32_t timeout_ms);
 void muse_state_nudge(void);
 
+/* Low Power policy outcome, written by the input task's power
+ * evaluation and read by the UI (brightness cap), the voice task
+ * (Wi-Fi rest) and the sleep check. */
+void muse_state_set_power_saving(bool saving);
+bool muse_state_power_saving(void);
+void muse_state_set_power_critical(bool critical);
+bool muse_state_power_critical(void);
+
 /* Touch/pet reaction. */
 void muse_state_make_happy(void);
 float muse_state_happiness(void);

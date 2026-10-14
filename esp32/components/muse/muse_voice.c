@@ -931,7 +931,7 @@ static void voice_task(void *arg)
             set_resting(rest);
             /* On battery Wi-Fi rests with the codecs, and between turns dozes
              * between beacons as xiaozhi's idle does; a press wakes it fully. */
-            muse_wifi_power(rest ? MUSE_WIFI_REST : battery ? MUSE_WIFI_DOZE : MUSE_WIFI_FULL);
+            muse_wifi_power(rest || muse_state_power_saving() ? MUSE_WIFI_REST : battery ? MUSE_WIFI_DOZE : MUSE_WIFI_FULL);
             if (rest) {
                 /* Wait for waking, USB power or a bench request without
                  * polling (the timeout is only a backstop, or a look for

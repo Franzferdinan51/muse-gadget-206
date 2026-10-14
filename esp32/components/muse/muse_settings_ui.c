@@ -1343,10 +1343,34 @@ static void on_reboot(lv_event_t *e)
     muse_input_request_reboot();
 }
 
+static lv_obj_t *s_power_val;
+
+static const char *power_mode_name(int mode)
+{
+    return mode == MUSE_POWER_ON ? "On (always saving)"
+           : mode == MUSE_POWER_OFF ? "Off" : "Auto (saves when low)";
+}
+
+static void on_power_cycle(lv_event_t *e)
+{
+    (void)e;
+    int next = muse_settings_power_mode() + 1;
+    if (next > MUSE_POWER_OFF) {
+        next = MUSE_POWER_AUTO;
+    }
+    muse_settings_set_power_mode(next);
+    if (s_power_val) {
+        lv_label_set_text(s_power_val, power_mode_name(next));
+    }
+}
+
 static void build_power_page(lv_obj_t *tile)
 {
     lv_obj_t *list;
     s_power = page(tile, "POWER", true, &list);
+    button(list, "Power mode (tap to change)", MUSE_BLUE, on_power_cycle, NULL);
+    s_power_val = label(list, MUSE_FONT_20, MUSE_TEXT, power_mode_name(muse_settings_power_mode()));
+    note(list, "Saving caps brightness and the CPU, rests Wi-Fi between beacons, and puts the screen to sleep sooner. Auto starts saving when the battery runs low.");
     note(list, "Power Muse off completely?");
     button(list, LV_SYMBOL_POWER "  Power off", COLOR_DANGER, on_power_off, NULL);
     button(list, LV_SYMBOL_REFRESH "  Reboot", MUSE_BLUE, on_reboot, NULL);

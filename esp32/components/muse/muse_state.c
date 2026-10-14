@@ -220,6 +220,14 @@ bool muse_state_asleep(void)
     return s_asleep;
 }
 
+static volatile bool s_power_saving;
+static volatile bool s_power_critical;
+
+void muse_state_set_power_saving(bool saving) { s_power_saving = saving; }
+bool muse_state_power_saving(void) { return s_power_saving; }
+void muse_state_set_power_critical(bool critical) { s_power_critical = critical; }
+bool muse_state_power_critical(void) { return s_power_critical; }
+
 void muse_state_wait_awake(uint32_t timeout_ms)
 {
     xEventGroupWaitBits(s_wake, AWAKE_BIT | NUDGE_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));

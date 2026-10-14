@@ -45,6 +45,7 @@ typedef enum {
     MUSE_SETTING_WIFI,          /* on/off or credentials */
     MUSE_SETTING_BLE,
     MUSE_SETTING_AVATAR,
+    MUSE_SETTING_POWER,
     MUSE_SETTING_HATCH,
 } muse_setting_t;
 
@@ -72,6 +73,11 @@ bool muse_settings_ble_on(void);
 #define MUSE_AVATAR_STUDIO 8      /* Juno studio render (collection) */
 int muse_settings_avatar(void);         /* MUSE_AVATAR_* */
 
+#define MUSE_POWER_AUTO 0   /* save when the battery runs low (default) */
+#define MUSE_POWER_ON   1   /* always saving */
+#define MUSE_POWER_OFF  2   /* never (a critical battery still protects) */
+int muse_settings_power_mode(void);     /* MUSE_POWER_* */
+
 void muse_settings_wifi(char ssid[MUSE_SSID_MAX + 1], char pass[MUSE_PASS_MAX + 1]);
 void muse_settings_hatch_host(char out[MUSE_HOST_MAX + 1]);
 void muse_settings_hatch_vm(char out[MUSE_VM_MAX + 1]);
@@ -86,6 +92,7 @@ void muse_settings_set_sleep_s(int secs);
 void muse_settings_set_wifi_on(bool on);
 void muse_settings_set_ble_on(bool on);
 void muse_settings_set_avatar(int which);   /* MUSE_AVATAR_* */
+void muse_settings_set_power_mode(int mode);   /* MUSE_POWER_* */
 /* A network name is remembered first among the saved ones and joined now;
  * an empty ssid forgets every saved network. */
 void muse_settings_set_wifi(const char *ssid, const char *pass);
