@@ -123,7 +123,32 @@ static lv_obj_t *s_meter[METER_SEGS];
 static lv_obj_t *s_speaker;
 static lv_obj_t *s_speaker_icon;
 static lv_obj_t *s_aux_icon;
+static lv_obj_t *s_repeat;   /* "say it again", bottom-left on touch boards */
 static lv_obj_t *s_image;   /* display.draw_url, over the face */
+static bool s_image_sticky;   /* agent's persisted face: taps don't dismiss it */
+
+/* Juno per-pose face loops (206 only): the CompanionApp's MP4 clips
+ * converted to GIF, since the S3 can't decode video. Shown as the face
+ * whenever no image overlay covers it; the agent's own avatar.set image
+ * (sticky overlay) and reply layouts take precedence, the pixel canvas
+ * is the fallback. */
+#if CONFIG_MUSE_BOARD_WAVESHARE_S3_206 && CONFIG_LV_USE_GIF
+#define JUNO_CLIPS 4
+extern const uint8_t juno_idle_start[] asm("_binary_juno_idle_gif_start");
+extern const uint8_t juno_idle_end[] asm("_binary_juno_idle_gif_end");
+extern const uint8_t juno_orb_start[] asm("_binary_juno_orb_gif_start");
+extern const uint8_t juno_orb_end[] asm("_binary_juno_orb_gif_end");
+extern const uint8_t juno_talking_start[] asm("_binary_juno_talking_gif_start");
+extern const uint8_t juno_talking_end[] asm("_binary_juno_talking_gif_end");
+extern const uint8_t juno_typing_start[] asm("_binary_juno_typing_gif_start");
+extern const uint8_t juno_typing_end[] asm("_binary_juno_typing_gif_end");
+static lv_obj_t *s_juno;
+static lv_img_dsc_t s_juno_dsc[JUNO_CLIPS];
+static int s_juno_clip = -1;
+#define JUNO_ENABLED 1
+#else
+#define JUNO_ENABLED 0
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 static lv_obj_t *s_camera_hint;
 #endif
@@ -169,7 +194,7 @@ typedef struct {
     int cols, lines;          /* the reply's page */
     int w, h, top;            /* and where it goes */
     lv_text_align_t align;
-    lv_obj_t *hides[4];       /* what it covers */
+    lv_obj_t *hides[6];       /* what it covers */
 } answer_layout_t;
 
 enum { ANSWER_HEARD, ANSWER_READ };
@@ -471,17 +496,17 @@ static void build_button_icons(lv_obj_t *face)
         lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_PRESS_LOST, NULL);
     }
 
-    /* "Say it again" (touch boards): a small repeat glyph opposite the aux
-     * icon. A tap replays the last reply; with none stored the caption
-     * says so. Kept dim so the face stays the screen. Right of the
-     * speaker circle (which spans to x=86 plus its click area). */
+    /* "Say it again" (touch boards): a small repeat glyph in the
+     * bottom-left corner, clear of the status cluster it used to crowd.
+     * A tap replays the last reply; with none stored the caption says
+     * so. Kept dim so the face stays the screen. */
     if (muse_board->touch) {
-        lv_obj_t *repeat = make_label(face, s_small ? MUSE_FONT_14 : MUSE_FONT_28, COLOR_DIM);
-        lv_label_set_text(repeat, LV_SYMBOL_REFRESH);
-        lv_obj_align(repeat, LV_ALIGN_TOP_LEFT, 108, 36);
-        lv_obj_clear_flag(repeat, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(repeat, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(repeat, on_repeat_hit, LV_EVENT_CLICKED, NULL);
+        s_repeat = make_label(face, s_small ? MUSE_FONT_14 : MUSE_FONT_28, COLOR_DIM);
+        lv_label_set_text(s_repeat, LV_SYMBOL_REFRESH);
+        lv_obj_align(s_repeat, LV_ALIGN_BOTTOM_LEFT, 40, -40);
+        lv_obj_clear_flag(s_repeat, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_repeat, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_repeat, on_repeat_hit, LV_EVENT_CLICKED, NULL);
     }
 
     /* Without touch the aux button opens the menu rather than sleeping. A board
@@ -725,14 +750,15 @@ static void add_hides(answer_layout_t *l, int n)
         .x1 = s_w / 2 - l->w / 2, .y1 = s_h / 2 + l->top,
         .x2 = s_w / 2 + l->w / 2 - 1, .y2 = s_h / 2 + l->top + l->h - 1,
     };
-    lv_obj_t *const hints[] = { s_mic_icon, s_aux_icon };
-    for (size_t i = 0; i < 2; i++) {
+    lv_obj_t *const hints[] = { s_mic_icon, s_aux_icon, s_repeat };
+    for (size_t i = 0; i < 3; i++) {
         if (!hints[i]) {
-            continue;   /* no aux icon on this board */
+            continue;   /* no aux icon on this board, or no touch for repeat */
         }
         lv_area_t a;
         lv_obj_get_coords(hints[i], &a);
-        if (a.x1 <= box.x2 && a.x2 >= box.x1 && a.y1 <= box.y2 && a.y2 >= box.y1) {
+        if (a.x1 <= box.x2 && a.x2 >= box.x1 && a.y1 <= box.y2 && a.y2 >= box.y1 &&
+            (size_t)n < sizeof(l->hides) / sizeof(l->hides[0])) {
             l->hides[n++] = hints[i];
         }
     }
@@ -941,6 +967,29 @@ static void build_screen(void)
     lv_image_set_src(s_canvas, &s_muse_src);
     lv_obj_align(s_canvas, LV_ALIGN_CENTER, 0, s_big_y);
     s_muse_y = s_big_y;
+#if JUNO_ENABLED
+    {
+        static const struct { const uint8_t *start, *end; } clips[JUNO_CLIPS] = {
+            { juno_idle_start, juno_idle_end },
+            { juno_orb_start, juno_orb_end },
+            { juno_talking_start, juno_talking_end },
+            { juno_typing_start, juno_typing_end },
+        };
+        for (int i = 0; i < JUNO_CLIPS; i++) {
+            s_juno_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
+            s_juno_dsc[i].header.cf = LV_COLOR_FORMAT_RAW;
+            s_juno_dsc[i].header.flags = 0;
+            s_juno_dsc[i].data_size = (size_t)(clips[i].end - clips[i].start);
+            s_juno_dsc[i].data = clips[i].start;
+        }
+        s_juno = lv_gif_create(face);
+        lv_gif_set_color_format(s_juno, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_size(s_juno, 200, 200);
+        lv_obj_align(s_juno, LV_ALIGN_CENTER, 0, s_big_y);
+        lv_obj_add_flag(s_juno, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_event_cb(s_juno, on_canvas_clicked, LV_EVENT_CLICKED, NULL);
+    }
+#endif
     lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_canvas, on_canvas_clicked, LV_EVENT_CLICKED, NULL);
     if (s_ring) {
@@ -1057,6 +1106,7 @@ static void on_cover_event(lv_event_t *e)
 static void image_hide_locked(void)
 {
     xSemaphoreTake(s_image_mutex, portMAX_DELAY);
+    s_image_sticky = false;   /* every hide unsticks; showers set it explicitly */
     if (s_image_buf) {
         lv_obj_add_flag(s_image, LV_OBJ_FLAG_HIDDEN);
         lv_image_set_src(s_image, NULL);
@@ -1126,6 +1176,9 @@ static void image_sync(void)
 static void on_image_clicked(lv_event_t *e)
 {
     (void)e;
+    if (s_image_sticky) {
+        return;   /* the agent's face: only avatar.clear takes it down */
+    }
 #if CONFIG_MUSE_WATCHER_CAMERA
     if (watcher_camera_preview_active()) {
         watcher_camera_preview_toggle();
@@ -1700,6 +1753,61 @@ void muse_ui_request_mdb_snapshot(void)
 volatile uint32_t muse_ui_frame_ticks;
 volatile uint32_t muse_ui_frame_stage;
 
+#if JUNO_ENABLED
+/* Pose clip, mirroring the CompanionApp's _clipFor: idle, listening->orb,
+ * thinking->typing, speaking->talking, everything else orb. Runs on the
+ * LVGL timer, so no display lock needed. */
+static void juno_sync(muse_mode_t mode)
+{
+    if (!s_juno) {
+        return;
+    }
+    static const int clip_for_mode[MUSE_MODE_COUNT] = { 1, 0, 1, 3, 2, 1, 1 };
+    bool overlay = s_image_dsc.data != NULL || s_gif_dsc.data != NULL;
+    bool want = s_answer < 0 && !overlay;
+    int clip = (mode >= 0 && mode < MUSE_MODE_COUNT) ? clip_for_mode[mode] : 1;
+    if (want && clip != s_juno_clip) {
+        lv_gif_set_src(s_juno, &s_juno_dsc[clip]);
+        s_juno_clip = clip;
+    }
+    bool showing = !lv_obj_has_flag(s_juno, LV_OBJ_FLAG_HIDDEN);
+    if (want != showing) {
+        lv_obj_set_flag(s_juno, LV_OBJ_FLAG_HIDDEN, !want);
+        lv_obj_set_flag(s_canvas, LV_OBJ_FLAG_HIDDEN, want);
+        if (!want) {
+            s_juno_clip = -1;
+        }
+    }
+}
+
+static bool juno_visible(void)
+{
+    return s_juno && !lv_obj_has_flag(s_juno, LV_OBJ_FLAG_HIDDEN);
+}
+#else
+static void juno_sync(muse_mode_t mode)
+{
+    (void)mode;
+}
+
+static bool juno_visible(void)
+{
+    return false;
+}
+#endif
+
+/* The agent's persisted face: taps stop dismissing the current overlay.
+ * From any task (download task); sticky clears on the next hide. */
+void muse_ui_image_set_sticky(bool sticky)
+{
+    if (!s_ready) {
+        return;
+    }
+    muse_board->display_lock(-1);
+    s_image_sticky = sticky;
+    muse_board->display_unlock();
+}
+
 static void frame_tick(lv_timer_t *timer)
 {
     muse_ui_frame_ticks++;
@@ -1732,6 +1840,7 @@ static void frame_tick(lv_timer_t *timer)
     }
     muse_ui_frame_stage = 3;
     update_chrome(now);
+    juno_sync(mode);
     muse_ui_frame_stage = 4;
     if (muse_menu_tick(now)) {
         image_hide_locked();
@@ -1762,10 +1871,12 @@ static void frame_tick(lv_timer_t *timer)
         .level = s_level,
         .happy = muse_state_happiness(),
     };
-    muse_ui_frame_stage = 5;
-    muse_pixel_render(&pose);
-    muse_ui_frame_stage = 6;
-    invalidate_muse();
+    if (!juno_visible()) {
+        muse_ui_frame_stage = 5;
+        muse_pixel_render(&pose);
+        muse_ui_frame_stage = 6;
+        invalidate_muse();
+    }
 
     update_status(mode, now);
     muse_ui_frame_stage = 7;

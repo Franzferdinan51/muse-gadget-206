@@ -140,7 +140,7 @@ volatile uint32_t muse_mdb_stream_calls;
 
 static void cmd_help(void)
 {
-    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot poweroff config settings sd sys nvs loglevel pump chirp ota\n");
+    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot poweroff config settings sd sys nvs loglevel pump chirp ota i2cscan\n");
 }
 
 static void cmd_version(void)
@@ -785,13 +785,21 @@ static void cmd_sd(const char *sub, const char *rest)
         struct dirent *e;
         int n = 0;
         while ((e = readdir(d)) && n < 64) {
+            /* stat() only when dir + name provably fits; overlong names
+             * list without a type/size rather than statting garbage. */
             char full[192];
-            snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
             struct stat st;
-            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+            bool known = false;
+            if (strlen(path) + 1 + strlen(e->d_name) + 1 <= sizeof(full)) {
+                strcpy(full, path);
+                strcat(full, "/");
+                strcat(full, e->d_name);
+                known = stat(full, &st) == 0;
+            }
+            if (known && S_ISDIR(st.st_mode)) {
                 out_fmt("D %s\n", e->d_name);
             } else {
-                out_fmt("F %s %ld\n", e->d_name, stat(full, &st) == 0 ? (long)st.st_size : -1L);
+                out_fmt("F %s %ld\n", e->d_name, known ? (long)st.st_size : -1L);
             }
             n++;
         }
@@ -1164,10 +1172,17 @@ void muse_mdb_handle_line(const char *line)
             out_raw("ERR bad_args usage: mdb loglevel <tag|*> <level>\n");
         }
     } else if (strcmp(verb, "poweroff") == 0) {
+        /* Via the input task, like the Power page: goodbye caption plus
+         * the USB-aware wait (a bare PMU bit just reboots on USB). */
         out_raw("OK powering off\n");
-        vTaskDelay(pdMS_TO_TICKS(80));
-        if (muse_board && muse_board->power_off) muse_board->power_off();
-        out_raw("ERR power_off_failed\n");
+        muse_input_request_power_off();
+    } else if (strcmp(verb, "i2cscan") == 0) {
+        char report[256];
+        if (muse_board && muse_board->scan_i2c && muse_board->scan_i2c(report, sizeof(report))) {
+            out_fmt("OK %s\n", report);
+        } else {
+            out_raw("ERR unsupported no I2C scan on this board\n");
+        }
     } else if (strcmp(verb, "ota") == 0) {
         char *sub = strtok_r(NULL, " \t", &save);
         cmd_ota(sub, sub ? strtok_r(NULL, "", &save) : NULL);

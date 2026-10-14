@@ -612,6 +612,28 @@ static void set_mic_gain(esp_codec_dev_handle_t mic, int db)
     esp_codec_dev_set_in_gain(mic, (float)db);
 }
 
+/* I2C diagnostic for `mdb i2cscan`: who answers on the control bus plus
+ * the PMU's LDO rail bits. 7-bit addresses; known residents are the
+ * ES8311 (0x18), ES7210 (0x40), AXP2101 (0x34) and FT3168 (0x38). */
+static bool scan_i2c(char *out, size_t cap)
+{
+    if (!out || !cap || !s_i2c_bus) {
+        return false;
+    }
+    size_t n = 0;
+    n += (size_t)snprintf(out + n, cap - n, "addrs:");
+    for (uint8_t a = 0x08; a < 0x78 && n < cap; a++) {
+        if (i2c_master_probe(s_i2c_bus, a, 20) == ESP_OK) {
+            n += (size_t)snprintf(out + n, cap - n, " %02x", a);
+        }
+    }
+    uint8_t ldo0 = 0, ldo1 = 0;
+    if (muse_pmu_rail_regs(&ldo0, &ldo1) == ESP_OK && n < cap) {
+        n += (size_t)snprintf(out + n, cap - n, " ldo0=%02x ldo1=%02x", ldo0, ldo1);
+    }
+    return true;
+}
+
 static const muse_board_t s_board = {
     .name = "Waveshare ESP32-S3-Touch-AMOLED-2.06",
     .width = LCD_H_RES,
@@ -640,6 +662,7 @@ static const muse_board_t s_board = {
     .poll_touch = poll_touch,
     .wait_buttons = NULL,
     .read_power = muse_pmu_read_power,
+    .scan_i2c = scan_i2c,
     .power_off = muse_pmu_power_off,
 };
 

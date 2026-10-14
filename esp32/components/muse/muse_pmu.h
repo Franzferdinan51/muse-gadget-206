@@ -50,3 +50,5 @@ esp_err_t muse_pmu_read_power(muse_power_t *out);
 
 /* Soft power-off: the AXP2101 cuts every rail. PWR turns the board back on. */
 esp_err_t muse_pmu_power_off(void);
+/* LDO on/off registers (0x90/0x91) for the I2C diagnostic. */
+esp_err_t muse_pmu_rail_regs(uint8_t *ldo0, uint8_t *ldo1);

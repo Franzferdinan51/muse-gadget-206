@@ -54,6 +54,9 @@ void muse_ui_preview_brightness(int pct);
 bool muse_ui_image_size(int *w, int *h);
 bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels);
 void muse_ui_image_hide(void);
+/* Agent's persisted face: taps stop dismissing the current overlay until
+ * the next hide. From any task. */
+void muse_ui_image_set_sticky(bool sticky);
 /*
  * Animated GIF avatar from display.draw_url / avatar.set, from any task.
  * On true, takes ownership of `data` (a PSRAM buffer holding the whole

@@ -102,6 +102,10 @@ typedef struct {
     esp_err_t (*read_power)(muse_power_t *out);
     /* Turns the board off; returns only on failure. */
     esp_err_t (*power_off)(void);
+    /* I2C diagnostic: probe the control bus and summarize who answers
+     * (codec/PMU/touch addresses plus PMU rail bits) into out.
+     * NULL: this board has no scan. */
+    bool (*scan_i2c)(char *out, size_t cap);
 } muse_board_t;
 
 /* The running board, set by muse_app_run(). */

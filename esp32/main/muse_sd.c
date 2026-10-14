@@ -36,7 +36,7 @@
 #define SD_SUPPORTED 0
 #endif
 
-static const char *TAG = "muse_sd";
+static const char *TAG = "link.sd";
 
 static bool s_mounted;
 #if SD_SUPPORTED

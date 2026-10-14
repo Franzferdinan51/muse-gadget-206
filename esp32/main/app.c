@@ -1544,6 +1544,36 @@ typedef struct {
 
 static void draw_url_done(const image_fetch_result_t *r, void *user) {
     draw_url_ctx_t *ctx = user;
+#if CONFIG_MUSE_ENABLED
+    muse_ui_image_set_sticky(false);   /* transient overlay: taps dismiss */
+#endif
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", r->ok);
+    if (r->ok) {
+        cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+        cJSON_AddStringToObject(payload, "format", r->format);
+        cJSON_AddNumberToObject(payload, "width", r->width);
+        cJSON_AddNumberToObject(payload, "height", r->height);
+        cJSON_AddNumberToObject(payload, "scale", r->scale);
+        cJSON_AddNumberToObject(payload, "bytes", (double)r->bytes);
+        cJSON_AddNumberToObject(payload, "ms", r->ms);
+    } else {
+        cJSON *error = cJSON_AddObjectToObject(result, "error");
+        cJSON_AddStringToObject(error, "code", r->code);
+        cJSON_AddStringToObject(error, "message", r->message);
+    }
+    noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
+    free(ctx);
+}
+
+/* avatar.set's completion: same result shape, but a success sticks the
+ * image as the agent's face (taps stop dismissing it) instead of a
+ * transient overlay. avatar.clear takes it back down. */
+static void avatar_set_done(const image_fetch_result_t *r, void *user) {
+    draw_url_ctx_t *ctx = user;
+#if CONFIG_MUSE_ENABLED
+    muse_ui_image_set_sticky(r->ok);
+#endif
     cJSON *result = cJSON_CreateObject();
     cJSON_AddBoolToObject(result, "ok", r->ok);
     if (r->ok) {
@@ -1568,6 +1598,11 @@ static void avatar_restore_done(const image_fetch_result_t *r, void *user) {
     (void)user;
     ESP_LOGI(TAG, "avatar restore %s (%s)", r->ok ? "done" : "failed",
              r->ok ? r->format : r->message);
+#if CONFIG_MUSE_ENABLED
+    if (r->ok) {
+        muse_ui_image_set_sticky(true);   /* the agent's face: taps don't dismiss */
+    }
+#endif
 }
 
 static void avatar_restore_once(void) {
@@ -1596,6 +1631,9 @@ static void reply_image_done(const image_fetch_result_t *r, void *user) {
     (void)user;
     ESP_LOGI(TAG, "reply image %s (%s)", r->ok ? "drawn" : "failed",
              r->ok ? r->format : r->message);
+#if CONFIG_MUSE_ENABLED
+    muse_ui_image_set_sticky(false);   /* transient overlay: taps dismiss */
+#endif
 }
 
 static void reply_image_poll(void) {
@@ -1626,6 +1664,9 @@ static void identity_avatar_done(const image_fetch_result_t *r, void *user) {
     (void)user;
     ESP_LOGI(TAG, "identity avatar %s (%s)", r->ok ? "drawn" : "failed",
              r->ok ? r->format : r->message);
+#if CONFIG_MUSE_ENABLED
+    muse_ui_image_set_sticky(false);   /* transient overlay: taps dismiss */
+#endif
 }
 
 static void on_agent_avatar(const char *url) {
@@ -1955,11 +1996,11 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
     }
-    /* Agent-changeable avatar: fetch a still image as the persistent face
-     * overlay (JPEG/RGB565 via image_fetch; animated GIF shows its first
-     * frame — full GIF decode is a follow-up needing a decoder + PSRAM
-     * budget). URL persists in NVS and re-fetches once per boot when Wi-Fi
-     * is up. avatar.clear returns to the procedural face. */
+    /* Agent-changeable avatar: the agent's face, changeable at any time.
+     * Stills and animated GIFs both loop persistently (taps don't
+     * dismiss, unlike transient overlays). URL persists in NVS and
+     * re-fetches once per boot when Wi-Fi is up. avatar.clear returns
+     * to the bundled face. */
     if (strcmp(command, "avatar.set") == 0) {
         cJSON *url = cJSON_GetObjectItem(params, "url");
         if (!cJSON_IsString(url) || !url->valuestring || !url->valuestring[0]) {
@@ -1984,7 +2025,7 @@ static cJSON *on_ws_command(
         strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
         const char *code, *message;
         if (!image_fetch_start(url->valuestring, IMAGE_FETCH_DEFAULT_ROW,
-                               draw_url_done, ctx, &code, &message)) {
+                               avatar_set_done, ctx, &code, &message)) {
             free(ctx);
             return command_error(code, message);
         }

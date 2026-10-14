@@ -177,6 +177,16 @@ esp_err_t muse_pmu_read_power(muse_power_t *out)
     return ESP_OK;
 }
 
+esp_err_t muse_pmu_rail_regs(uint8_t *ldo0, uint8_t *ldo1)
+{
+    if (!s_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(rd(REG_LDO_ONOFF0, ldo0), TAG, "read ldo0");
+    ESP_RETURN_ON_ERROR(rd(REG_LDO_ONOFF1, ldo1), TAG, "read ldo1");
+    return ESP_OK;
+}
+
 esp_err_t muse_pmu_power_off(void)
 {
     uint8_t v;

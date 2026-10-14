@@ -283,14 +283,11 @@ esp_err_t muse_audio_read(int16_t *mono, size_t frames)
     return ESP_OK;
 }
 
-esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
+static esp_err_t audio_write_inner(const int16_t *mono, size_t frames, bool mute)
 {
     if (!s_spk || !s_open) {
         return ESP_ERR_INVALID_STATE;
     }
-    /* Speaker off still plays silence at the same pace, so captions timed to
-     * the audio scroll as if it were heard. */
-    bool mute = !muse_settings_speaker_on();
     while (frames) {
         size_t n = frames > MUSE_AUDIO_CHUNK ? MUSE_AUDIO_CHUNK : frames;
         for (size_t i = 0; i < n; i++) {
@@ -304,6 +301,20 @@ esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
         frames -= n;
     }
     return ESP_OK;
+}
+
+esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
+{
+    /* Speaker off still plays silence at the same pace, so captions timed to
+     * the audio scroll as if it were heard. */
+    return audio_write_inner(mono, frames, !muse_settings_speaker_on());
+}
+
+esp_err_t muse_audio_write_unmuted(const int16_t *mono, size_t frames)
+{
+    /* Speaker self-tests (chirp, loopback): a test that obeys the mute
+     * tells you nothing. */
+    return audio_write_inner(mono, frames, false);
 }
 
 float muse_audio_dbfs(const int16_t *mono, size_t frames)
@@ -342,5 +353,5 @@ void muse_audio_chirp(int rising)
         float s = sinf(phase) + 0.3f * sinf(3.0f * phase);
         buf[i] = (int16_t)(s * env * 7000.0f);
     }
-    muse_audio_write(buf, N);
+    muse_audio_write_unmuted(buf, N);
 }
