@@ -272,8 +272,13 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
         }
         return;
     }
-    // 8 KB stack: TLS handshake + flash writes during the OTA download.
-    if (xTaskCreate(ota_task, "ota", 16384, ctx, 5, NULL) != pdPASS) {
+    // 16 KB stack, in PSRAM: TLS handshake + flash writes during the
+    // OTA download. Internal RAM is too fragmented in the paired
+    // steady state (~10 KB largest block) for a 16 KB internal stack
+    // to ever allocate — the task failed to start and the update
+    // died silently. Precedent: voice_player.c's PSRAM-stack task.
+    if (xTaskCreateWithCaps(ota_task, "ota", 16384, ctx, 5, NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "could not start OTA task");
         free(ctx->url);
         free(ctx);

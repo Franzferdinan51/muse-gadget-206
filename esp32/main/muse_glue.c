@@ -639,6 +639,40 @@ bool muse_mdb_ota_start(const char *url, bool force);
 #define OTA_AUTO_FIRST_MS  (45 * 1000)
 #define OTA_AUTO_PERIOD_MS (6LL * 60 * 60 * 1000)
 #define OTA_AUTO_BUF       2048
+#define OTA_AUTO_FAIL_KEY  "lastfail"
+
+/* Why the last OTA attempt failed, persisted across reboots: ota.c
+ * knows the reason but only reports it live, and the boots that fail
+ * are exactly the ones whose logs rotate away. Saved by the OTA
+ * callback below; read back by muse_mdb_ota_status(). */
+static char s_ota_want_ver[64] = "";
+
+static void ota_auto_fail_save(const char *text)
+{
+    nvs_handle_t nv;
+    if (nvs_open(OTA_AUTO_NVS_NS, NVS_READWRITE, &nv) != ESP_OK) {
+        return;
+    }
+    if (text && text[0]) {
+        nvs_set_str(nv, OTA_AUTO_FAIL_KEY, text);
+    } else {
+        nvs_erase_key(nv, OTA_AUTO_FAIL_KEY);
+    }
+    nvs_commit(nv);
+    nvs_close(nv);
+}
+
+static void ota_auto_fail_load(char *out, size_t cap)
+{
+    out[0] = '\0';
+    nvs_handle_t nv;
+    if (nvs_open(OTA_AUTO_NVS_NS, NVS_READONLY, &nv) != ESP_OK) {
+        return;
+    }
+    size_t n = cap;
+    nvs_get_str(nv, OTA_AUTO_FAIL_KEY, out, &n);
+    nvs_close(nv);
+}
 
 static void ota_auto_parse_ver(const char *s, long out[3])
 {
@@ -786,6 +820,7 @@ static void ota_auto_check_once(void)
     ESP_LOGI(TAG, "ota auto: updating %s -> %s", running, version);
     snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
              "Updating to %.40s...", version);
+    strlcpy(s_ota_want_ver, version, sizeof(s_ota_want_ver));
     muse_mdb_ota_start(url, false);
 }
 
@@ -892,6 +927,16 @@ static void glue_ota_cb(const ota_event_t *ev, void *user)
         : ev->result == OTA_RESULT_SKIPPED ? "skipped" : "failed";
     strlcpy(s_ota_state, st, sizeof(s_ota_state));
     strlcpy(s_ota_detail, ev->detail ? ev->detail : "", sizeof(s_ota_detail));
+    if (ev->result == OTA_RESULT_FAILED) {
+        char rec[160];
+        snprintf(rec, sizeof(rec), "%s%s%s",
+                 s_ota_want_ver[0] ? s_ota_want_ver : "",
+                 s_ota_want_ver[0] ? ": " : "",
+                 ev->detail ? ev->detail : "failed");
+        ota_auto_fail_save(rec);
+    } else if (ev->result == OTA_RESULT_APPLIED) {
+        ota_auto_fail_save(NULL);
+    }
 }
 
 bool muse_mdb_ota_start(const char *url, bool force)
@@ -901,6 +946,7 @@ bool muse_mdb_ota_start(const char *url, bool force)
     }
     strlcpy(s_ota_state, "starting", sizeof(s_ota_state));
     s_ota_detail[0] = '\0';
+    ota_auto_fail_save(NULL);
     ota_start(url, force, glue_ota_cb, NULL);
     return true;
 }
@@ -910,5 +956,15 @@ bool muse_mdb_ota_status(char *state, size_t state_len,
 {
     strlcpy(state, s_ota_state, state_len);
     strlcpy(detail, s_ota_detail, detail_len);
+    if (strcmp(state, "idle") == 0) {
+        /* No attempt this boot: if a previous boot's attempt failed,
+         * say so — the persisted record is the only witness left. */
+        char saved[160];
+        ota_auto_fail_load(saved, sizeof(saved));
+        if (saved[0]) {
+            strlcpy(state, "failed", state_len);
+            strlcpy(detail, saved, detail_len);
+        }
+    }
     return true;
 }
