@@ -1575,7 +1575,21 @@ static void on_chat_ack(stream_t *s)
  * CONFIG_MUSE_TTS_KEY (Kconfig; set it via the gitignored
  * devices/sdkconfig.local overlay, never in the tree). Empty key or
  * speaker off -> start_tts() keeps the original silence pacing.
+ * MuseOS: the platform may instead supply the key at runtime -
+ * muse_platform_tts_key() (the glue reads /sdcard/tts.key) - which wins
+ * when it returns one, so a published binary needs no secret baked in.
  */
+extern "C" {
+__attribute__((weak)) const char *muse_platform_tts_key(void) { return nullptr; }
+}
+/* The effective speech key: the runtime (SD) key when present, else the
+ * compiled-in CONFIG_MUSE_TTS_KEY. */
+static const char *tts_key(void)
+{
+    const char *k = muse_platform_tts_key();
+    return (k && k[0]) ? k : CONFIG_MUSE_TTS_KEY;
+}
+
 #define TTS_TEXT_MAX 900
 static uint8_t *s_tts_stage;
 static SemaphoreHandle_t s_tts_lock;
@@ -1638,7 +1652,7 @@ static void tts_task(void *)
                 char url[192];
                 snprintf(url, sizeof(url), "%s/v1/audio/speech", CONFIG_MUSE_TTS_BASE);
                 char auth[192];
-                snprintf(auth, sizeof(auth), "Bearer %s", CONFIG_MUSE_TTS_KEY);
+                snprintf(auth, sizeof(auth), "Bearer %s", tts_key());
                 tts_http_ctx_t ctx = { job->gen };
                 esp_http_client_config_t cfg = {};
                 cfg.url = url;
@@ -1738,7 +1752,7 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
-        if (muse_settings_speaker_on() && CONFIG_MUSE_TTS_KEY[0] && s_turn.texts) {
+        if (muse_settings_speaker_on() && tts_key()[0] && s_turn.texts) {
             /* Real speech: the contract in the comment above. The fetcher
              * streams MP3 into staging; tts_pump() feeds tts_data(). */
             m.pcm_start = s_turn.pcm_out;

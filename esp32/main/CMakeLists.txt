@@ -58,6 +58,9 @@ set(GADGET_REQUIRES
     esp_driver_ledc
     esp_driver_spi
     esp_driver_uart
+    fatfs
+    sdmmc
+    esp_driver_sdmmc
     esp_lcd
     lwip
     mbedtls
@@ -79,6 +82,7 @@ endif()
 
 if(CONFIG_MUSE_ENABLED)
     list(APPEND GADGET_SRCS "muse_glue.c")
+    list(APPEND GADGET_SRCS "muse_sd.c")
 endif()
 
 if(CONFIG_HOMEHUB_LED_BACKEND_DEVKIT_GPIO27 OR CONFIG_HOMEHUB_LED_BACKEND_VOICE_RING OR CONFIG_HOMEHUB_LED_BACKEND_RESPEAKER_LITE)

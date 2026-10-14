@@ -15,6 +15,7 @@
  */
 
 #include "muse_glue.h"
+#include "muse_sd.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -866,6 +867,9 @@ void muse_glue_start(void) {
 void muse_glue_storage_ready(void) {
     muse_ble_set_name(identity_ble_name());
     xEventGroupSetBits(s_ready, BIT_STORAGE);
+    /* SD card (MuseOS): mount the TF card if one is in the slot. The TTS
+     * key file is read lazily from it; absence is normal, not an error. */
+    muse_sd_mount();
 }
 
 void muse_glue_link_ready(void) {
@@ -947,6 +951,25 @@ static void glue_ota_cb(const ota_event_t *ev, void *user)
             }
         }
     }
+}
+
+/* MDB health hook (weak in muse_mdb.c): SD card state. */
+bool muse_mdb_sd_status(bool *present, unsigned *total_mb,
+                        unsigned *free_mb, bool *key_on_sd)
+{
+    uint64_t total = 0, freeb = 0;
+    *present = muse_sd_info(&total, &freeb);
+    *total_mb = (unsigned)(total >> 20);
+    *free_mb = (unsigned)(freeb >> 20);
+    *key_on_sd = muse_sd_tts_key() != NULL;
+    return true;
+}
+
+/* Runtime TTS key for muse_chat_session.c: the SD file wins over any
+ * compiled-in key, so published binaries never carry the secret. */
+const char *muse_platform_tts_key(void)
+{
+    return muse_sd_tts_key();
 }
 
 bool muse_mdb_ota_start(const char *url, bool force)

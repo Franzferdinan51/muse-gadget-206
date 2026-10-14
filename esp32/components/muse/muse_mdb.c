@@ -188,6 +188,15 @@ __attribute__((weak)) bool muse_mdb_ota_status(char *state, size_t state_len,
     return false;
 }
 
+/* SD card state, implemented by the glue (MuseOS) where a card slot is
+ * wired. Weak default: no card. */
+__attribute__((weak)) bool muse_mdb_sd_status(bool *present, unsigned *total_mb,
+                                              unsigned *free_mb, bool *key_on_sd)
+{
+    (void)present; (void)total_mb; (void)free_mb; (void)key_on_sd;
+    return false;
+}
+
 static void cmd_ota(const char *sub, const char *rest)
 {
     if (sub && strcmp(sub, "start") == 0) {
@@ -281,6 +290,14 @@ static void cmd_health(void)
     const esp_partition_t *run = esp_ota_get_running_partition();
     out_fmt("\"ota_slot\":\"%s\",", run ? run->label : "?");
     out_fmt("\"fw_version\":\"%s\",", esp_app_get_description()->version);
+    {
+        bool sd_present = false, sd_key = false;
+        unsigned sd_total = 0, sd_free = 0;
+        muse_mdb_sd_status(&sd_present, &sd_total, &sd_free, &sd_key);
+        out_fmt("\"sd_present\":%s,\"sd_total_mb\":%u,\"sd_free_mb\":%u,\"tts_key_on_sd\":%s,",
+                sd_present ? "true" : "false", sd_total, sd_free,
+                sd_key ? "true" : "false");
+    }
     char ostate[16], odetail[96];
     if (muse_mdb_ota_status(ostate, sizeof(ostate), odetail, sizeof(odetail))) {
         out_fmt("\"ota_state\":\"%s\"}\n", ostate);
