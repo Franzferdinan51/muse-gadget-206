@@ -1561,6 +1561,31 @@ static void draw_url_done(const image_fetch_result_t *r, void *user) {
     noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
     free(ctx);
 }
+
+/* Fire-and-forget restore of the persisted avatar URL, once per boot. */
+static void avatar_restore_done(const image_fetch_result_t *r, void *user) {
+    (void)user;
+    ESP_LOGI(TAG, "avatar restore %s (%s)", r->ok ? "done" : "failed",
+             r->ok ? r->format : r->message);
+}
+
+static void avatar_restore_once(void) {
+    static bool done = false;
+    if (done) return;
+    char url[513];
+    if (!config_get_str("avatar_url", url, sizeof(url)) || !url[0]) {
+        done = true;   /* nothing persisted: stop checking */
+        return;
+    }
+    const char *code, *message;
+    if (!image_fetch_start(url, IMAGE_FETCH_DEFAULT_ROW, avatar_restore_done,
+                           NULL, &code, &message)) {
+        /* Transient (e.g. fetcher busy): retry on the next heartbeat. */
+        ESP_LOGW(TAG, "avatar restore deferred: %s", message);
+        return;
+    }
+    done = true;
+}
 #endif
 
 #if CONFIG_MUSE_WATCHER_CAMERA
@@ -1880,6 +1905,52 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
     }
+    /* Agent-changeable avatar: fetch a still image as the persistent face
+     * overlay (JPEG/RGB565 via image_fetch; animated GIF shows its first
+     * frame — full GIF decode is a follow-up needing a decoder + PSRAM
+     * budget). URL persists in NVS and re-fetches once per boot when Wi-Fi
+     * is up. avatar.clear returns to the procedural face. */
+    if (strcmp(command, "avatar.set") == 0) {
+        cJSON *url = cJSON_GetObjectItem(params, "url");
+        if (!cJSON_IsString(url) || !url->valuestring || !url->valuestring[0]) {
+            return command_error("missing_param", "url is required");
+        }
+        if (strlen(url->valuestring) > 512) {
+            return command_error("invalid_param", "url too long (max 512)");
+        }
+        /* Validate the scheme BEFORE persisting, so a rejected set can't
+         * clobber the previous good URL. */
+        bool http_ok = strncasecmp(url->valuestring, "https://", 8) == 0 ||
+                       strncasecmp(url->valuestring, "http://", 7) == 0;
+        if (!http_ok) {
+            return command_error("invalid_params", "url must be http:// or https://");
+        }
+        if (!config_set_str("avatar_url", url->valuestring)) {
+            return command_error("storage_error", "failed to persist avatar url");
+        }
+        draw_url_ctx_t *ctx = calloc(1, sizeof(*ctx));
+        if (!ctx) return command_error("out_of_memory", "failed to allocate");
+        ctx->session_generation = session_generation;
+        strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
+        const char *code, *message;
+        if (!image_fetch_start(url->valuestring, IMAGE_FETCH_DEFAULT_ROW,
+                               draw_url_done, ctx, &code, &message)) {
+            free(ctx);
+            return command_error(code, message);
+        }
+        cJSON *async = cJSON_CreateObject();
+        cJSON_AddBoolToObject(async, "_async", true);
+        return async;
+    }
+    if (strcmp(command, "avatar.clear") == 0) {
+        config_erase_key("avatar_url");
+#if CONFIG_MUSE_ENABLED
+        muse_ui_image_hide();
+#endif
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
     if (strcmp(command, "display.show_animation") == 0) {
         led_status_show_animation();
         muse_card_hide();
@@ -1922,11 +1993,24 @@ static cJSON *on_ws_command(
         cJSON *brightness = cJSON_GetObjectItem(params, "brightness");
         cJSON *theme = cJSON_GetObjectItem(params, "theme");
         cJSON *keep_on = cJSON_GetObjectItem(params, "keep_screen_on");
+        cJSON *speak = cJSON_GetObjectItem(params, "speak_replies");
+        cJSON *sleep_s = cJSON_GetObjectItem(params, "sleep_s");
         if (cJSON_IsNumber(brightness)) {
             int pct = brightness->valueint;
             if (pct < 0) pct = 0;
             if (pct > 100) pct = 100;
-            if (muse_board && muse_board->set_brightness) muse_board->set_brightness(pct);
+            if (pct == 0) {
+                /* Screen off now without changing the persisted level. */
+                if (muse_board && muse_board->set_brightness) muse_board->set_brightness(0);
+            } else {
+                muse_settings_set_brightness(pct);
+            }
+        }
+        if (cJSON_IsBool(speak)) {
+            muse_settings_set_speaker_on(cJSON_IsTrue(speak));
+        }
+        if (cJSON_IsNumber(sleep_s)) {
+            muse_settings_set_sleep_s(sleep_s->valueint);
         }
         /* keep_screen_on is implemented for real: it drives the
          * persisted auto-sleep setting (muse_settings_sleep_s, where
@@ -1966,36 +2050,71 @@ static cJSON *on_ws_command(
         if (!cJSON_IsNumber(w) || !cJSON_IsNumber(h)) {
             return command_error("missing_param", "width and height required");
         }
-        /* Store dimensions for subsequent image.data calls. */
-        s_stream_w = w->valueint;
-        s_stream_h = h->valueint;
+        int iw = w->valueint, ih = h->valueint;
+        int max_w = 410, max_h = 502;
+#if CONFIG_MUSE_ENABLED
+        int ui_w = 0, ui_h = 0;
+        if (muse_ui_image_size(&ui_w, &ui_h) && ui_w > 0 && ui_h > 0) {
+            max_w = ui_w;
+            max_h = ui_h;
+        }
+#endif
+        if (iw <= 0 || ih <= 0 || iw > max_w || ih > max_h) {
+            return command_error("invalid_param", "width/height out of range");
+        }
+        if ((size_t)iw * (size_t)ih > (size_t)410 * 502) {
+            return command_error("invalid_param", "image exceeds frame buffer");
+        }
+        s_stream_w = iw;
+        s_stream_h = ih;
         s_stream_y = 0;
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
         return result;
     }
     if (strcmp(command, "image.data") == 0) {
+        if (s_stream_w <= 0 || s_stream_h <= 0) {
+            return command_error("invalid_state", "call image.start first");
+        }
         cJSON *rows = cJSON_GetObjectItem(params, "rows");
         cJSON *y = cJSON_GetObjectItem(params, "y");
         if (!cJSON_IsString(rows) || !rows->valuestring) {
             return command_error("missing_param", "rows (base64) required");
         }
-        /* Decode base64 RGB565 rows and draw them. */
+        size_t b64_len = strlen(rows->valuestring);
+        if (b64_len == 0 || b64_len > 512 * 1024) {
+            return command_error("invalid_param", "rows size out of range");
+        }
         size_t out_len = 0;
-        mbedtls_base64_decode(NULL, 0, &out_len, (const uint8_t *)rows->valuestring, strlen(rows->valuestring));
+        /* Size query: mbedTLS returns BUFFER_TOO_SMALL when dst is NULL
+         * with non-empty output — that IS the success path here. */
+        int b64q = mbedtls_base64_decode(NULL, 0, &out_len,
+                                         (const uint8_t *)rows->valuestring, b64_len);
+        if ((b64q != 0 && b64q != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL) ||
+            out_len == 0 || out_len > (size_t)410 * 502 * 2) {
+            return command_error("invalid_param", "rows decode length invalid");
+        }
+        if (out_len % ((size_t)s_stream_w * 2) != 0) {
+            return command_error("invalid_param", "rows not whole image rows");
+        }
         uint8_t *decoded = malloc(out_len);
         if (!decoded) return command_error("out_of_memory", "failed to allocate");
         if (mbedtls_base64_decode(decoded, out_len, &out_len,
-                                   (const uint8_t *)rows->valuestring, strlen(rows->valuestring)) != 0) {
+                                   (const uint8_t *)rows->valuestring, b64_len) != 0) {
             free(decoded);
             return command_error("invalid_param", "base64 decode failed");
         }
         int row_y = cJSON_IsNumber(y) ? y->valueint : s_stream_y;
-        int row_h = (int)(out_len / (s_stream_w * 2));
-        if (row_h > 0 && s_stream_w > 0) {
-            muse_ui_image_draw(0, row_y, s_stream_w, row_h, (const uint16_t *)decoded);
-            s_stream_y = row_y + row_h;
+        int row_h = (int)(out_len / ((size_t)s_stream_w * 2));
+        if (row_y < 0 || row_h <= 0 || row_y + row_h > s_stream_h) {
+            free(decoded);
+            return command_error("invalid_param", "rows exceed image height");
         }
+        if (!muse_ui_image_draw(0, row_y, s_stream_w, row_h, (const uint16_t *)decoded)) {
+            free(decoded);
+            return command_error("invalid_param", "image draw out of bounds");
+        }
+        s_stream_y = row_y + row_h;
         free(decoded);
         cJSON *result = cJSON_CreateObject();
         cJSON_AddBoolToObject(result, "ok", true);
@@ -2921,6 +3040,13 @@ void app_run(void) {
             ensure_access_token_ready_with_gate_held(false, true);
             operation_gate_give();
         }
+
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+        /* One-shot persisted-avatar restore once the network is up. */
+        if (wifi_mgr_is_connected()) {
+            avatar_restore_once();
+        }
+#endif
 
         // Reconcile the data-plane view with the tunnel's real state. The tunnel
         // stream opens/resets independently of the control session, so the LED

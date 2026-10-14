@@ -158,6 +158,11 @@ static char s_register_req_id[40] = {0};
 static bool s_register_acked = false;
 static bool s_heartbeat_registered = false;
 static TaskHandle_t s_task = nullptr;
+// Triage counters: invokes seen vs results sent. A growing gap means
+// results are dropped (stale session, full queue) — check before OTA.
+static std::atomic<uint32_t> s_invokes_seen{0};
+static std::atomic<uint32_t> s_results_sent{0};
+static std::atomic<uint32_t> s_results_dropped{0};
 
 #define NOISE_CTRL_STACK 12288
 #if CONFIG_MUSE_ENABLED && CONFIG_SPIRAM
@@ -1527,6 +1532,7 @@ struct ota_ctx {
 static void queue_result(noise_ctrl_session_generation_t session_generation,
                          const char *request_id, cJSON *result) {
     if (!session_generation || !s_result_q || !request_id) {
+        s_results_dropped++;
         cJSON_Delete(result);
         return;
     }
@@ -1535,13 +1541,17 @@ static void queue_result(noise_ctrl_session_generation_t session_generation,
     pr.request_id = strdup(request_id);
     pr.result = result;
     if (pr.request_id == nullptr) {
+        s_results_dropped++;
         cJSON_Delete(result);
         return;
     }
     if (xQueueSend(s_result_q, &pr, pdMS_TO_TICKS(100)) != pdTRUE) {
         free(pr.request_id);
         cJSON_Delete(result);
+        s_results_dropped++;
         ESP_LOGW(TAG, "result queue full, dropping result for %s", request_id);
+    } else {
+        s_results_sent++;
     }
 }
 
@@ -1626,6 +1636,11 @@ static void send_device_health(
                           charging ? charging : cJSON_CreateNull());
     cJSON_AddItemToObject(metrics, "usb_power",
                           usb_power ? usb_power : cJSON_CreateNull());
+    cJSON *link = cJSON_CreateObject();
+    cJSON_AddNumberToObject(link, "invokes_seen", s_invokes_seen.load());
+    cJSON_AddNumberToObject(link, "results_sent", s_results_sent.load());
+    cJSON_AddNumberToObject(link, "results_dropped", s_results_dropped.load());
+    cJSON_AddItemToObject(health, "link", link);
     cJSON_AddItemToObject(health, "metrics", metrics);
 #if CONFIG_MUSE_ENABLED
     // Merge in the watch-specific fields. device.health used to have a
@@ -1680,28 +1695,59 @@ static void handle_invoke_request(
         return;
     }
 
+    // Tolerant invoke parse: CompanionApp/server may send link.invoke,
+    // device.invoke, bare {command,params}, or nested {params:{command}}.
     cJSON *method = cJSON_GetObjectItem(root, "method");
-    if (!cJSON_IsString(method) || !method->valuestring
-        || strcmp(method->valuestring, "link.invoke") != 0) {
-        cJSON_Delete(root);
-        return;
-    }
-
+    const char *method_s = (cJSON_IsString(method) && method->valuestring)
+                           ? method->valuestring : "";
+    bool is_invoke = (strcmp(method_s, "link.invoke") == 0 ||
+                      strcmp(method_s, "device.invoke") == 0 ||
+                      strcmp(method_s, "invoke") == 0);
     cJSON *id_j = cJSON_GetObjectItem(root, "id");
+    if (id_j == nullptr) {
+        // Some senders use requestId / request_id.
+        id_j = cJSON_GetObjectItem(root, "requestId");
+        if (id_j == nullptr) id_j = cJSON_GetObjectItem(root, "request_id");
+    }
     cJSON *cmd_j = cJSON_GetObjectItem(root, "command");
     cJSON *cmd_params = cJSON_GetObjectItem(root, "params");
-    const char *request_id = (cJSON_IsString(id_j) && id_j->valuestring)
-                             ? id_j->valuestring : nullptr;
+    if (!cJSON_IsObject(cmd_params)) cmd_params = nullptr;
+    if (!cJSON_IsString(cmd_j) && cmd_params) {
+        // Nested command: {params:{command:"...", ...}}.
+        cJSON *nested = cJSON_GetObjectItem(cmd_params, "command");
+        if (cJSON_IsString(nested)) cmd_j = nested;
+    }
     const char *command = (cJSON_IsString(cmd_j) && cmd_j->valuestring)
                           ? cmd_j->valuestring : "";
-    if (!cJSON_IsObject(cmd_params)) cmd_params = nullptr;
-
+    if (!command[0] && !is_invoke && method_s[0] && strchr(method_s, '.')) {
+        // Bare method-as-command: {method:"device.health", id:...}.
+        command = method_s;
+        is_invoke = true;
+    }
+    if (!is_invoke && !command[0]) {
+        cJSON_Delete(root);
+        return;
+    }
+    char id_buf[32];
+    const char *request_id = nullptr;
+    if (cJSON_IsString(id_j) && id_j->valuestring && id_j->valuestring[0]) {
+        request_id = id_j->valuestring;
+    } else if (cJSON_IsNumber(id_j)) {
+        snprintf(id_buf, sizeof(id_buf), "%d", id_j->valueint);
+        request_id = id_buf;
+    }
     if (!request_id) {
+        // Echo-less invokes still execute for one-way commands, but without
+        // an id there is no result route — drop with a log.
+        ESP_LOGW(TAG, "invoke without id dropped: command=%s", command);
         cJSON_Delete(root);
         return;
     }
 
-    ESP_LOGI(TAG, "invoke request: command=%s", command);
+    s_invokes_seen++;
+    ESP_LOGI(TAG, "invoke request: command=%s (seen=%lu sent=%lu dropped=%lu)", command,
+             (unsigned long)s_invokes_seen.load(), (unsigned long)s_results_sent.load(),
+             (unsigned long)s_results_dropped.load());
 
     if (strcmp(command, "device.ota") == 0) {
         cJSON *url = cmd_params ? cJSON_GetObjectItem(cmd_params, "url") : nullptr;
@@ -2525,6 +2571,7 @@ extern "C" void noise_ctrl_send_command_result(
     const char *request_id, cJSON *result) {
     if (!session_generation || !request_id || !result) {
         if (result) cJSON_Delete(result);
+        s_results_dropped++;
         return;
     }
     queue_result(session_generation, request_id, result);

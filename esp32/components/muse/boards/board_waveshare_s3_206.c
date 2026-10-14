@@ -381,8 +381,9 @@ static bool display_lock(int timeout_ms)
 
 static void set_brightness_direct(int pct)
 {
-    /* CO5300 "write display brightness" (0x51). */
-    /* CO5300 "write display brightness" (0x51), QSPI-framed. */
+    /* Runs on the band send task (via brightness_tramp), so direct tx. */
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
     uint8_t level = (uint8_t)(pct * 255 / 100);
     esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | (0x51 << 8), &level, 1);
 }
@@ -437,6 +438,23 @@ static void panel_sleep_tramp(void *arg)
 static void panel_sleep(bool sleep)
 {
     muse_lcd_bands_run(panel_sleep_tramp, (void *)(uintptr_t)sleep);
+}
+
+/*
+ * Screen off: pause LVGL and sleep the CO5300 so the chip can light-sleep
+ * (muse_input.c). Uses panel_sleep() for both directions so wake runs the
+ * validated reset -> init -> gap -> on sequence, not a bare SLPOUT.
+ * Touch stays powered; BOOT + PMU PWR still wake.
+ */
+static void display_pause(bool pause)
+{
+    if (pause) {
+        esp_lv_adapter_pause(-1);
+        panel_sleep(true);
+    } else {
+        panel_sleep(false);
+        esp_lv_adapter_resume();
+    }
 }
 
 static unsigned poll_buttons(void)
@@ -592,7 +610,7 @@ static const muse_board_t s_board = {
     .display_unlock = esp_lv_adapter_unlock,
     .set_brightness = set_brightness,
     .panel_sleep = panel_sleep,
-    .display_pause = NULL,
+    .display_pause = display_pause,
     .audio_init = audio_init,
     .mic_slot = -1,
     .set_mic_gain = set_mic_gain,

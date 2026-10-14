@@ -948,25 +948,38 @@ void muse_pixel_render(const muse_pose_t *p)
 
     memset(s_fb, C_BG, sizeof(s_fb));
 
-    /* ---- body motion ---- */
-    float bob, breathe_rate = 2.0f, lean = 0, hop = 0;
+    /* ---- body motion ----
+     * Timing matches the CompanionApp portrait (avatar_motion.dart) so the
+     * watch and phone move together: idle 1.8, listening 3.5, thinking
+     * 2.4/1.3, speaking bounce 6 + 8 Hz pulse, error 28 Hz shake.
+     * Amplitudes stay in 64 px sprite units (small) to avoid clipping. */
+    float bob, breathe_rate = 2.0f, lean = 0, hop = 0, pulse = 0;
     switch (mode) {
     case MUSE_MODE_LISTENING:
-        bob = sinf(t * 3.0f) * 0.6f;
+        bob = sinf(t * 3.5f) * 0.6f;
+        lean = sinf(t * 2.0f) * 0.5f;
+        pulse = 0.08f * sinf(t * 2.5f);
         break;
     case MUSE_MODE_THINKING:
         bob = sinf(t * 2.4f) * 0.8f;
         lean = sinf(t * 1.3f) * 1.2f;
+        pulse = 0.05f * sinf(t * 1.8f);
         break;
-    case MUSE_MODE_SPEAKING:
-        bob = sinf(t * 5.0f) * 0.6f - level * 1.5f;
+    case MUSE_MODE_SPEAKING: {
+        float talk = 0.5f + 0.5f * sinf(t * 8.0f);
+        bob = sinf(t * 6.0f) * 0.6f - level * 1.5f;
+        lean = sinf(t * 3.0f) * 0.5f;
+        pulse = 0.12f * talk;
         break;
+    }
     case MUSE_MODE_ERROR:
         bob = 1.0f;
-        lean = sinf(t * 18.0f) * (p->mode_t < 0.6f ? 1.0f : 0.0f);
+        lean = sinf(t * 28.0f) * 0.7f;
         break;
     default:
         bob = sinf(t * 1.8f) * 1.0f;
+        lean = sinf(t * 0.9f) * 0.4f;
+        pulse = 0.05f * sinf(t * 1.2f);
         break;
     }
     if (happy > 0) {
@@ -980,7 +993,7 @@ void muse_pixel_render(const muse_pose_t *p)
 
     float breathe = sinf(t * breathe_rate + 1.0f) * 0.03f;
     avatar_t j;
-    j.a = 16.0f * (1 + breathe) * (2.0f - squash) + level * 0.8f;
+    j.a = 16.0f * (1 + breathe + pulse) * (2.0f - squash) + level * 0.8f;
     j.b = 23.0f * (1 - breathe) * squash;
     j.cx = 32.0f + lean;
     j.cy = 56.5f - j.b + bob * 0.5f - hop;   /* feet stay near the ground */
