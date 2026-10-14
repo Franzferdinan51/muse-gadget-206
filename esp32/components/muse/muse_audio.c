@@ -38,6 +38,7 @@ static const char *TAG = "muse_audio";
 static esp_codec_dev_handle_t s_spk;
 static esp_codec_dev_handle_t s_mic;
 static bool s_open;
+static bool s_board_ok;
 static int16_t s_in_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
 static int16_t s_out_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
 
@@ -65,8 +66,17 @@ static esp_err_t open_codecs(void)
 
 esp_err_t muse_audio_init(int volume, int mic_gain_db)
 {
-    ESP_RETURN_ON_ERROR(muse_board->audio_init(&s_spk, &s_mic), TAG, "codec init failed");
-    ESP_RETURN_ON_FALSE(s_spk && s_mic, ESP_FAIL, TAG, "codec init failed");
+    /* The board init runs once: if it succeeded but opening the codecs
+     * failed, a retry re-opens against the same devices instead of
+     * asking the board for a second I2S bus. Board-level failures
+     * unwind their channels (board audio_init), so retrying the board
+     * init after one is clean too. Retries are how the voice pipeline
+     * survives the boot-time DMA race (see muse_voice_start). */
+    if (!s_board_ok) {
+        ESP_RETURN_ON_ERROR(muse_board->audio_init(&s_spk, &s_mic), TAG, "codec init failed");
+        ESP_RETURN_ON_FALSE(s_spk && s_mic, ESP_FAIL, TAG, "codec init failed");
+        s_board_ok = true;
+    }
 
     ESP_RETURN_ON_ERROR(open_codecs(), TAG, "open codecs");
     muse_audio_set_volume(volume);

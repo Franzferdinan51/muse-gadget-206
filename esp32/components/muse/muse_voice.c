@@ -1020,13 +1020,15 @@ static void voice_task(void *arg)
     }
 }
 
-esp_err_t muse_voice_start(QueueHandle_t queue)
+static esp_err_t voice_try_start(void)
 {
-    s_queue = queue;
-    s_pre = heap_caps_malloc(PRE_CHUNKS * sizeof(pre_chunk_t), MUSE_BIG_CAPS);
-    if (!s_pre || muse_audio_init(muse_settings_volume(), muse_settings_mic_gain()) != ESP_OK) {
-        muse_state_set_mode(MUSE_MODE_ERROR);
-        muse_state_set_caption("AUDIO INIT FAILED");
+    if (!s_pre) {
+        s_pre = heap_caps_malloc(PRE_CHUNKS * sizeof(pre_chunk_t), MUSE_BIG_CAPS);
+    }
+    if (!s_pre) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (muse_audio_init(muse_settings_volume(), muse_settings_mic_gain()) != ESP_OK) {
         return ESP_FAIL;
     }
     /* Stack in PSRAM if there is any (this task never writes flash) to spare internal RAM for Wi-Fi/BLE. */
@@ -1035,6 +1037,41 @@ esp_err_t muse_voice_start(QueueHandle_t queue)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+static void voice_retry_task(void *arg)
+{
+    (void)arg;
+    for (int attempt = 0; attempt < 6; attempt++) {
+        vTaskDelay(pdMS_TO_TICKS(4000));
+        if (voice_try_start() == ESP_OK) {
+            ESP_LOGI(TAG, "voice pipeline up (retry %d)", attempt + 1);
+            muse_state_set_mode(MUSE_MODE_IDLE);
+            muse_state_set_caption("%s", "");
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    ESP_LOGE(TAG, "voice pipeline still down after retries");
+    vTaskDelete(NULL);
+}
+
+esp_err_t muse_voice_start(QueueHandle_t queue)
+{
+    s_queue = queue;
+    if (voice_try_start() == ESP_OK) {
+        return ESP_OK;
+    }
+    muse_state_set_mode(MUSE_MODE_ERROR);
+    muse_state_set_caption("AUDIO INIT FAILED");
+    /* The usual cause is a boot-time DMA allocation race: internal
+     * RAM is at its most fragmented while Wi-Fi/BLE/link all spin up,
+     * and one lost race used to leave the watch voiceless (ERROR on
+     * the glass) until a luckier reboot. Retry in the background
+     * until the pipeline is up. */
+    xTaskCreatePinnedToCoreWithCaps(voice_retry_task, "muse_vretry", 3072, NULL, 5, NULL,
+                                    MUSE_AUDIO_CORE, MUSE_BIG_CAPS);
+    return ESP_FAIL;
 }
 
 void muse_voice_set_monitor(bool on)

@@ -42,6 +42,7 @@ volatile uint32_t muse_bands_chunks_sent;
 volatile uint32_t muse_bands_chunk_isrs;
 volatile uint32_t muse_bands_notifies;
 volatile uint32_t muse_bands_queue_fails;
+volatile uint32_t muse_bands_stalls;
 
 static lv_display_t *s_disp;
 static esp_lcd_panel_handle_t s_panel;
@@ -101,6 +102,30 @@ static esp_err_t queue_band(lv_display_t *disp, esp_lcd_panel_handle_t panel, in
  * copied while the one before is on the wire. Even row counts keep every
  * piece's window starting on an even row, which the CO5300 needs.
  */
+/* A chunk completion can still be lost for good (a panel op that
+ * escaped the serializer, a bus glitch): the panel IO reports no
+ * error, the ISR just never comes, and both waits below used to wait
+ * forever - the watch froze on glass with the adapter lock held
+ * (2026-10-14: frame loop dead 40+ s, chunks_sent = chunk_isrs + 1).
+ * Recover instead: abandon the band, refill the chunk slots and
+ * complete the flush synthetically. One dropped frame beats a frozen
+ * watch. A late real ISR is harmless: chunk_done() ignores a zero
+ * count and the counting semaphore caps at its maximum. */
+static void bands_recover(const char *where)
+{
+    ESP_LOGE(TAG, "band stall recovered at %s (chunks_out=%d)", where, s_chunks_out);
+    muse_bands_stalls++;
+    portENTER_CRITICAL(&s_lock);
+    s_chunks_out = 0;
+    portEXIT_CRITICAL(&s_lock);
+    while (xSemaphoreTake(s_chunk_free, 0) == pdTRUE) {
+    }
+    xSemaphoreGive(s_chunk_free);
+    xSemaphoreGive(s_chunk_free);
+    muse_bands_notifies++;
+    lv_display_flush_ready(s_disp);
+}
+
 static void send_bands(void *arg)
 {
     (void)arg;
@@ -118,7 +143,10 @@ static void send_bands(void *arg)
         s_chunks_out = (b.y2 - b.y1 + rows - 1) / rows;
         for (int y = b.y1; y < b.y2; y += rows) {
             int h = b.y2 - y < rows ? b.y2 - y : rows;
-            xSemaphoreTake(s_chunk_free, portMAX_DELAY);
+            if (xSemaphoreTake(s_chunk_free, pdMS_TO_TICKS(250)) != pdTRUE) {
+                bands_recover("take");
+                xSemaphoreTake(s_chunk_free, portMAX_DELAY);
+            }
             memcpy(s_chunk[k], b.data + (size_t)(y - b.y1) * row, h * row);
             muse_bands_chunks_sent++;
             esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, b.x1, y, b.x2, y + h, s_chunk[k]);
@@ -140,8 +168,9 @@ static void send_bands(void *arg)
         int waited_ms = 0;
         while (s_chunks_out > 0) {
             vTaskDelay(1);
-            if (++waited_ms == 3000) {
-                ESP_LOGW(TAG, "band completion drain >3s (chunks_out=%d)", s_chunks_out);
+            if (++waited_ms == 250) {
+                bands_recover("drain");
+                break;
             }
         }
     }

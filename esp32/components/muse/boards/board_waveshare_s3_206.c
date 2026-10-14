@@ -497,8 +497,17 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
             .invert_flags = { 0 },
         },
     };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_chan, &std_cfg), TAG, "I2S TX");
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx_chan, &std_cfg), TAG, "I2S RX");
+    if (i2s_channel_init_std_mode(tx_chan, &std_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "I2S TX");
+        goto fail;
+    }
+    if (i2s_channel_init_std_mode(rx_chan, &std_cfg) != ESP_OK) {
+        /* The failure seen live (2026-10-14): DMA descriptor alloc
+         * loses the boot-time memory race. Unwind so a later retry
+         * starts from a clean I2S bus instead of a leaked one. */
+        ESP_LOGE(TAG, "I2S RX");
+        goto fail;
+    }
 
     /* Codec interfaces over the shared buses, esp_codec_dev 1.5.x API.
      * (The first draft of this function used another API generation's
@@ -516,7 +525,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_data_cfg);
     if (!gpio_if || !data_if) {
         ESP_LOGE(TAG, "codec interface init failed");
-        return ESP_FAIL;
+        goto fail;
     }
 
     /* ES8311 speaker codec on the shared I2C bus. */
@@ -539,7 +548,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     const audio_codec_if_t *es8311_if = es8311_codec_new(&es8311_cfg);
     if (!es8311_if) {
         ESP_LOGE(TAG, "ES8311 init failed");
-        return ESP_FAIL;
+        goto fail;
     }
     esp_codec_dev_cfg_t spk_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_OUT,
@@ -549,7 +558,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     *spk = esp_codec_dev_new(&spk_cfg);
     if (!*spk) {
         ESP_LOGE(TAG, "speaker dev failed");
-        return ESP_FAIL;
+        goto fail;
     }
 
     /* ES7210 dual-mic ADC on the shared I2C bus. Mic bias/gain are not
@@ -568,7 +577,7 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     const audio_codec_if_t *es7210_if = es7210_codec_new(&es7210_cfg);
     if (!es7210_if) {
         ESP_LOGE(TAG, "ES7210 init failed");
-        return ESP_FAIL;
+        goto fail;
     }
     esp_codec_dev_cfg_t mic_cfg = {
         .dev_type = ESP_CODEC_DEV_TYPE_IN,
@@ -578,9 +587,22 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     *mic = esp_codec_dev_new(&mic_cfg);
     if (!*mic) {
         ESP_LOGE(TAG, "mic dev failed");
-        return ESP_FAIL;
+        goto fail;
     }
     return ESP_OK;
+
+fail:
+    if (*mic) {
+        esp_codec_dev_delete(*mic);
+        *mic = NULL;
+    }
+    if (*spk) {
+        esp_codec_dev_delete(*spk);
+        *spk = NULL;
+    }
+    i2s_del_channel(rx_chan);
+    i2s_del_channel(tx_chan);
+    return ESP_FAIL;
 }
 
 static void set_mic_gain(esp_codec_dev_handle_t mic, int db)

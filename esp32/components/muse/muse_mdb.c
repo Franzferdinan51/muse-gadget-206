@@ -310,6 +310,8 @@ static void cmd_health(void)
     out_fmt("\"band_notifies\":%u,", (unsigned)muse_bands_notifies);
     extern volatile uint32_t muse_bands_queue_fails;
     out_fmt("\"band_fails\":%u,", (unsigned)muse_bands_queue_fails);
+    extern volatile uint32_t muse_bands_stalls;
+    out_fmt("\"band_stalls\":%u,", (unsigned)muse_bands_stalls);
     out_fmt("\"mdb_streams\":%u,", (unsigned)muse_mdb_stream_calls);
     const esp_partition_t *run = esp_ota_get_running_partition();
     out_fmt("\"ota_slot\":\"%s\",", run ? run->label : "?");
