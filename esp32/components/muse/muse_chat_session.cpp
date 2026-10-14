@@ -55,7 +55,9 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_http_client.h"
 #include "esp_tls.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -248,6 +250,7 @@ struct turn_t {
 /* 10 KB, most of it the MP3 decoder: in PSRAM on boards that let static data go
  * there (the AIPI), so Wi-Fi setup and TLS have the internal RAM. */
 EXT_RAM_BSS_ATTR static turn_t s_turn;
+static volatile uint32_t s_tts_gen;   /* cloud TTS: bumped per turn + per fetch */
 
 /* Turn milestones, logged together when the turn ends. */
 enum mark_t : uint8_t { M_RELEASE, M_SENT, M_ACK, M_TEXT, M_DONE, M_TTS, M_MP3, M_AUDIO, M_COUNT };
@@ -952,6 +955,7 @@ static void turn_reset_streams(void)
 static void turn_finish(void)
 {
     turn_reset_streams();
+    s_tts_gen = s_tts_gen + 1;
     s_turn.phase = P_IDLE;
     s_turn.dict_id = s_turn.chat_id = 0;
     s_turn.tts_msg = -1;
@@ -1490,6 +1494,149 @@ static void on_chat_ack(stream_t *s)
     emit(MUSE_HATCH_EV_SENT, nullptr);
 }
 
+
+/* ---- Cloud TTS (MuseOS addition) ----
+ * start_tts() below documents the contract for a real speech source:
+ * feed the MP3 to tts_data() as it arrives and set s_turn.mp3_ended at
+ * the end. This is that source. A small task POSTs the reply text to an
+ * OpenAI-shaped /v1/audio/speech endpoint and stages the MP3 in PSRAM;
+ * the session task drains the staging from tts_pump(). The key lives in
+ * CONFIG_MUSE_TTS_KEY (Kconfig; set it via the gitignored
+ * devices/sdkconfig.local overlay, never in the tree). Empty key or
+ * speaker off -> start_tts() keeps the original silence pacing.
+ */
+#define TTS_TEXT_MAX 900
+static uint8_t *s_tts_stage;
+static SemaphoreHandle_t s_tts_lock;
+static QueueHandle_t s_tts_queue;
+static size_t s_tts_stage_len;   /* staged bytes (fetcher appends) */
+static size_t s_tts_stage_out;   /* drained bytes (session task) */
+static volatile int s_tts_state; /* 0 idle, 1 fetching, 2 done, 3 failed */
+struct tts_job_t { uint32_t gen; char text[TTS_TEXT_MAX + 1]; };
+
+static bool tts_stage_append(const uint8_t *data, size_t len, uint32_t gen)
+{
+    xSemaphoreTake(s_tts_lock, portMAX_DELAY);
+    size_t room = MP3_BUF - s_tts_stage_len;
+    size_t n = len < room ? len : room;
+    if (n) {
+        memcpy(s_tts_stage + s_tts_stage_len, data, n);
+        s_tts_stage_len += n;
+    }
+    xSemaphoreGive(s_tts_lock);
+    return gen == s_tts_gen;
+}
+
+struct tts_http_ctx_t { uint32_t gen; };
+static esp_err_t tts_http_event(esp_http_client_event_t *evt)
+{
+    if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
+        tts_http_ctx_t *ctx = static_cast<tts_http_ctx_t *>(evt->user_data);
+        if (!tts_stage_append(static_cast<const uint8_t *>(evt->data),
+                              static_cast<size_t>(evt->data_len), ctx->gen)) {
+            return ESP_FAIL;   /* stale turn: abort the transfer */
+        }
+    }
+    return ESP_OK;
+}
+
+static void tts_task(void *)
+{
+    tts_job_t *job = static_cast<tts_job_t *>(psram_alloc(sizeof(tts_job_t)));
+    for (;;) {
+        if (xQueueReceive(s_tts_queue, job, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        xSemaphoreTake(s_tts_lock, portMAX_DELAY);
+        s_tts_stage_len = 0;
+        s_tts_stage_out = 0;
+        s_tts_state = 1;
+        xSemaphoreGive(s_tts_lock);
+        int status = -1;
+        cJSON *root = cJSON_CreateObject();
+        if (root) {
+            cJSON_AddStringToObject(root, "model", CONFIG_MUSE_TTS_MODEL);
+            cJSON_AddStringToObject(root, "input", job->text);
+            cJSON_AddStringToObject(root, "response_format", "mp3");
+            if (CONFIG_MUSE_TTS_VOICE[0]) {
+                cJSON_AddStringToObject(root, "voice", CONFIG_MUSE_TTS_VOICE);
+            }
+            char *body = cJSON_PrintUnformatted(root);
+            cJSON_Delete(root);
+            if (body) {
+                char url[192];
+                snprintf(url, sizeof(url), "%s/v1/audio/speech", CONFIG_MUSE_TTS_BASE);
+                char auth[192];
+                snprintf(auth, sizeof(auth), "Bearer %s", CONFIG_MUSE_TTS_KEY);
+                tts_http_ctx_t ctx = { job->gen };
+                esp_http_client_config_t cfg = {};
+                cfg.url = url;
+                cfg.method = HTTP_METHOD_POST;
+                cfg.crt_bundle_attach = esp_crt_bundle_attach;
+                cfg.timeout_ms = 20000;
+                cfg.event_handler = tts_http_event;
+                cfg.user_data = &ctx;
+                esp_http_client_handle_t client = esp_http_client_init(&cfg);
+                if (client) {
+                    esp_http_client_set_header(client, "Authorization", auth);
+                    esp_http_client_set_header(client, "Content-Type", "application/json");
+                    esp_http_client_set_post_field(client, body, strlen(body));
+                    if (esp_http_client_perform(client) == ESP_OK) {
+                        status = esp_http_client_get_status_code(client);
+                    }
+                    esp_http_client_cleanup(client);
+                }
+                free(body);
+            }
+        }
+        xSemaphoreTake(s_tts_lock, portMAX_DELAY);
+        if (job->gen == s_tts_gen) {
+            s_tts_state = (status == 200 && s_tts_stage_len > 0) ? 2 : 3;
+        }
+        size_t got = s_tts_stage_len;
+        xSemaphoreGive(s_tts_lock);
+        ESP_LOGI(TAG, "tts fetch: http %d, %u bytes", status, (unsigned)got);
+    }
+}
+
+static bool tts_init(void)
+{
+    if (s_tts_queue) {
+        return true;
+    }
+    s_tts_stage = static_cast<uint8_t *>(psram_alloc(MP3_BUF));
+    s_tts_lock = xSemaphoreCreateMutex();
+    s_tts_queue = xQueueCreate(1, sizeof(tts_job_t));
+    if (!s_tts_stage || !s_tts_lock || !s_tts_queue) {
+        return false;
+    }
+    return xTaskCreate(tts_task, "muse_tts", 16384, nullptr, 5, nullptr) == pdPASS;
+}
+
+static void tts_kick(int msg_idx)
+{
+    if (!s_turn.texts || !tts_init()) {
+        return;
+    }
+    tts_job_t job;
+    s_tts_gen = s_tts_gen + 1;
+    job.gen = s_tts_gen;
+    const char *src = s_turn.texts + msg_idx * TEXT_MAX;
+    size_t n = strlen(src);
+    if (n > TTS_TEXT_MAX) {
+        n = TTS_TEXT_MAX;
+        while (n > 200 && src[n - 1] != '.' && src[n - 1] != '!' && src[n - 1] != '?') {
+            n--;
+        }
+        while (n && (static_cast<unsigned char>(src[n]) & 0xc0) == 0x80) {
+            n--;
+        }
+    }
+    memcpy(job.text, src, n);
+    job.text[n] = '\0';
+    xQueueOverwrite(s_tts_queue, &job);
+}
+
 /* ---- Turn: speech ---- */
 
 static void start_tts(void)
@@ -1517,6 +1664,24 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
+        if (muse_settings_speaker_on() && CONFIG_MUSE_TTS_KEY[0] && s_turn.texts) {
+            /* Real speech: the contract in the comment above. The fetcher
+             * streams MP3 into staging; tts_pump() feeds tts_data(). */
+            m.pcm_start = s_turn.pcm_out;
+            m.pcm_frames = 0;
+            m.tts = TTS_ACTIVE;
+            s_turn.tts_msg = i;
+            s_turn.silent = false;
+            s_turn.mp3_len = 0;
+            s_turn.mp3_ended = false;
+            s_turn.kbps = 0;
+            s_turn.down_rate = 0;
+            mp3dec_init(&s_turn.dec);
+            ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
+            show_reply_start(m);
+            tts_kick(i);
+            return;
+        }
         m.pcm_start = s_turn.pcm_out;
         m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
         m.tts = TTS_ACTIVE;
@@ -1551,6 +1716,42 @@ static void tts_end(stream_t *s, bool ok)
     } else {
         s_turn.msgs[i].tts = TTS_FINISHED;
         s_turn.tts_msg = -1;
+    }
+}
+
+
+/* Session task: drain the fetcher's staging into the mp3 buffer. */
+static void tts_pump(void)
+{
+    if (s_turn.tts_msg < 0 || s_turn.silent || !s_tts_queue) {
+        return;
+    }
+    xSemaphoreTake(s_tts_lock, portMAX_DELAY);
+    size_t avail = s_tts_stage_len - s_tts_stage_out;
+    size_t room = MP3_BUF - s_turn.mp3_len;
+    size_t n = avail < room ? avail : room;
+    size_t out = s_tts_stage_out;
+    int state = s_tts_state;
+    if (n) {
+        s_tts_stage_out += n;
+    }
+    bool drained_all = (s_tts_stage_out >= s_tts_stage_len);
+    xSemaphoreGive(s_tts_lock);
+    if (n) {
+        tts_data(s_tts_stage + out, n);
+    }
+    if (state == 2 && drained_all) {
+        s_turn.mp3_ended = true;
+        s_tts_state = 0;
+    } else if (state == 3) {
+        /* Fetch failed: fall back to reading-pace silence so the reply
+         * still shows in full. */
+        msg_t &m = s_turn.msgs[s_turn.tts_msg];
+        m.pcm_start = s_turn.pcm_out;
+        m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
+        s_turn.silent = true;
+        s_tts_state = 0;
+        ESP_LOGW(TAG, "tts fetch failed; showing the reply instead");
     }
 }
 
@@ -1976,6 +2177,7 @@ static void hatch_task(void *arg)
         }
         if (s_turn.phase == P_WAIT_REPLY) {
             start_tts();
+            tts_pump();
             decode();
         }
         if (!s_connected) {

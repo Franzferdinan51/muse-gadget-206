@@ -344,4 +344,25 @@ menu "ESP32 Device SDK"
             Manufacturing provisions the pairing key in KEY2 before Secure Boot
             locks read protection. No shared software attestation key is used.
 
+
+    config MUSE_TTS_KEY
+        string "Cloud TTS API key (empty = replies are shown, not spoken)"
+        default ""
+        help
+            Bearer key for the /v1/audio/speech endpoint below. Set it in
+            the gitignored devices/sdkconfig.local overlay, never in the
+            tree. Empty disables spoken replies entirely.
+
+    config MUSE_TTS_BASE
+        string "Cloud TTS API base URL"
+        default "https://openrouter.ai/api"
+
+    config MUSE_TTS_MODEL
+        string "Cloud TTS model"
+        default "fish-audio/s2.1-pro-free:free"
+
+    config MUSE_TTS_VOICE
+        string "Cloud TTS voice (empty = provider default)"
+        default ""
+
 endmenu
