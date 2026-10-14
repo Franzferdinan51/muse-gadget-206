@@ -90,8 +90,8 @@ static const char *TAG = "board-206";
 #define AUDIO_MCLK GPIO_NUM_16
 #define AUDIO_BCLK GPIO_NUM_41
 #define AUDIO_WS GPIO_NUM_45
-#define AUDIO_DOUT GPIO_NUM_42   /* to ES8311 (speaker) */
-#define AUDIO_DIN GPIO_NUM_40    /* from ES7210 (mics) */
+#define AUDIO_DOUT GPIO_NUM_40   /* ESP TX -> codec SDIN (playback) */
+#define AUDIO_DIN GPIO_NUM_42    /* ESP RX <- codec SDOUT (capture) */
 #define AUDIO_PA GPIO_NUM_46     /* power amp enable */
 
 #define DRAW_BUF_LINES 118
@@ -468,7 +468,11 @@ static unsigned poll_buttons(void)
 }
 
 /* Audio: ES8311 speaker + ES7210 dual mics via I2S.
- * Pins from the 2.06 schematic: MCLK=16, BCLK=41, WS=45, DOUT=42, DIN=40.
+ * Pins: MCLK=16, BCLK=41, WS=45, DOUT=40, DIN=42. (Corrected 2026-10-14:
+ * DOUT/DIN were swapped in the original port - playback left on the
+ * codecs' output net and capture was read off their input net, so both
+ * directions ran as digital silence with perfect registers. Vendor BSP
+ * pinout + Waveshare's 08_ES8311 sketch setPins(41,45,40,42,16) agree.)
  * PA_CTRL (GPIO46) enables the speaker amp. */
 static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t *mic)
 {
@@ -634,6 +638,45 @@ static bool scan_i2c(char *out, size_t cap)
     return true;
 }
 
+/* Audio diagnostic for `mdb regs`: raw register reads of both codecs over
+ * the shared control bus (7-bit addresses, raw bus API form). */
+static bool audio_regs(char *out, size_t cap)
+{
+    if (!out || !cap || !s_i2c_bus) {
+        return false;
+    }
+    static const struct { uint8_t addr; uint8_t last; const char *name; } devs[] = {
+        { 0x18, 0x44, "es8311" },
+        { 0x40, 0x4f, "es7210" },
+    };
+    size_t n = 0;
+    for (size_t d = 0; d < sizeof(devs) / sizeof(devs[0]) && n < cap; d++) {
+        i2c_device_config_t dc = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = devs[d].addr,
+            .scl_speed_hz = 100000,
+        };
+        i2c_master_dev_handle_t h;
+        if (i2c_master_bus_add_device(s_i2c_bus, &dc, &h) != ESP_OK) {
+            return false;
+        }
+        n += (size_t)snprintf(out + n, cap - n, "%s:", devs[d].name);
+        for (uint8_t r = 0; r <= devs[d].last && n < cap; r++) {
+            uint8_t v = 0;
+            if (i2c_master_transmit_receive(h, &r, 1, &v, 1, 50) == ESP_OK) {
+                n += (size_t)snprintf(out + n, cap - n, " %02x=%02x", r, v);
+            } else {
+                n += (size_t)snprintf(out + n, cap - n, " %02x=XX", r);
+            }
+        }
+        i2c_master_bus_rm_device(h);
+        if (n < cap) {
+            n += (size_t)snprintf(out + n, cap - n, "\n");
+        }
+    }
+    return true;
+}
+
 static const muse_board_t s_board = {
     .name = "Waveshare ESP32-S3-Touch-AMOLED-2.06",
     .width = LCD_H_RES,
@@ -663,6 +706,7 @@ static const muse_board_t s_board = {
     .wait_buttons = NULL,
     .read_power = muse_pmu_read_power,
     .scan_i2c = scan_i2c,
+    .audio_regs = audio_regs,
     .power_off = muse_pmu_power_off,
 };
 

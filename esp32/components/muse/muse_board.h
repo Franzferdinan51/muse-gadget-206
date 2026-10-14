@@ -106,6 +106,9 @@ typedef struct {
      * (codec/PMU/touch addresses plus PMU rail bits) into out.
      * NULL: this board has no scan. */
     bool (*scan_i2c)(char *out, size_t cap);
+    /* Audio diagnostic: dump the codec register files into out (one
+     * "name reg=val ..." line per codec). NULL: no register access. */
+    bool (*audio_regs)(char *out, size_t cap);
 } muse_board_t;
 
 /* The running board, set by muse_app_run(). */

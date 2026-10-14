@@ -69,7 +69,10 @@ static void out_fmt(const char *fmt, ...)
     int n = vsnprintf(b, sizeof(b), fmt, ap);
     va_end(ap);
     if (n > 0) {
-        muse_console_write(b, (size_t)n);
+        /* vsnprintf returns the would-be length: clamp to the buffer or
+         * a long reply reads (and leaks) stack past b. */
+        size_t len = (size_t)n < sizeof(b) ? (size_t)n : sizeof(b) - 1;
+        muse_console_write(b, len);
     }
 }
 
@@ -140,7 +143,7 @@ volatile uint32_t muse_mdb_stream_calls;
 
 static void cmd_help(void)
 {
-    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot poweroff config settings sd sys nvs loglevel pump chirp ota i2cscan\n");
+    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot poweroff config settings sd sys nvs loglevel pump chirp ota i2cscan regs loopback\n");
 }
 
 static void cmd_version(void)
@@ -1189,6 +1192,22 @@ void muse_mdb_handle_line(const char *line)
         } else {
             out_raw("ERR unsupported no I2C scan on this board\n");
         }
+    } else if (strcmp(verb, "regs") == 0) {
+        /* Codec register dump (audio diagnostic): what state did the
+         * codec drivers actually leave the chips in? */
+        static char report[1280];
+        if (muse_board && muse_board->audio_regs && muse_board->audio_regs(report, sizeof(report))) {
+            /* Too long for one out_fmt (256 B formatter): stream it raw. */
+            out_raw("OK ");
+            out_raw(report);
+        } else {
+            out_raw("ERR unsupported no codec register access on this board\n");
+        }
+    } else if (strcmp(verb, "loopback") == 0) {
+        /* Speaker->mic acoustic loopback test; per-tone levels land in
+         * the log (see muse_audio_loopback_test). */
+        muse_voice_request_loopback();
+        out_raw("OK loopback requested, results in log\n");
     } else if (strcmp(verb, "ota") == 0) {
         char *sub = strtok_r(NULL, " \t", &save);
         cmd_ota(sub, sub ? strtok_r(NULL, "", &save) : NULL);
