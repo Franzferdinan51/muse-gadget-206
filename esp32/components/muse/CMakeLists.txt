@@ -33,6 +33,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_audio.c"
         "muse_pmu.c"
         "muse_input.c"
+        "muse_mdb.c"
         "muse_menu.c"
         "muse_voice.c"
         "muse_adpcm.c"
@@ -112,6 +113,7 @@ set(muse_priv_requires
     bt esp-tls mbedtls esp_app_format esp_http_client
     noise_core minimp3
     esp_lcd esp_adc esp_driver_i2s esp_driver_ledc esp_driver_spi esp_driver_uart esp_wifi
+    app_update
     esp_driver_pcnt)
 list(APPEND muse_priv_requires camera)
 
@@ -123,6 +125,14 @@ idf_component_register(
     REQUIRES esp_driver_gpio esp_driver_i2c
     PRIV_REQUIRES ${muse_priv_requires}
 )
+
+# Under the -Os bench/OTA profile, GCC's format-truncation analysis
+# flags long-standing snprintf callsites in this component that the
+# -O2 product build never sees; IDF promotes the warning to an error.
+# Relax only that promotion, only for this component.
+if(CONFIG_COMPILER_OPTIMIZATION_SIZE)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=format-truncation)
+endif()
 
 if(CONFIG_MUSE_ENABLED)
     # LVGL spins forever on a failed assert unless LV_ASSERT_HANDLER is set,

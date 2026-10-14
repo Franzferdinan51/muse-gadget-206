@@ -197,6 +197,49 @@ static esp_lcd_panel_handle_t s_panel;
         } \
     } while (0)
 
+/* Touch state cache: written by poll_touch() in the input task, read by
+ * the LVGL indev callback in the adapter task. Plain volatiles - a torn
+ * read costs one frame of pointer position, nothing more. */
+static volatile int16_t s_touch_x, s_touch_y;
+static volatile bool s_touch_down;
+
+static void touch_cache_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    data->point.x = s_touch_x;
+    data->point.y = s_touch_y;
+    data->state = s_touch_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+/* AIWatchOS ft3168_read pattern, ripped: poll the chip from the input
+ * task at ~30 ms, one 5 ms wake-retry on error (the FT3168 idles into
+ * Monitor mode and NACKs the first read after a gap), errors dropped.
+ * The read NEVER runs inside the LVGL handler. */
+static void poll_touch(void)
+{
+    static TickType_t last;
+    TickType_t now = xTaskGetTickCount();
+    if (last && now - last < pdMS_TO_TICKS(30)) return;
+    last = now;
+    if (!s_tp) return;
+    esp_err_t err = esp_lcd_touch_read_data(s_tp);
+    if (err != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        err = esp_lcd_touch_read_data(s_tp);
+        if (err != ESP_OK) return;
+    }
+    esp_lcd_touch_point_data_t pt = {0};
+    uint8_t cnt = 0;
+    if (esp_lcd_touch_get_data(s_tp, &pt, &cnt, 1) != ESP_OK) return;
+    if (cnt > 0) {
+        s_touch_x = (int16_t)pt.x;
+        s_touch_y = (int16_t)pt.y;
+        s_touch_down = true;
+    } else {
+        s_touch_down = false;
+    }
+}
+
 static lv_display_t *display_start(lv_indev_t **touch)
 {
     /* QSPI bus for CO5300. Panel must be powered (LCD_EN) before any traffic. */
@@ -314,13 +357,20 @@ static lv_display_t *display_start(lv_indev_t **touch)
         },
     };
     DISPLAY_CHECK(esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, &s_tp), "FT3168 touch");
-    const esp_lv_adapter_touch_config_t lv_tp_cfg =
-        ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp, s_tp);
-    *touch = esp_lv_adapter_register_touch(&lv_tp_cfg);
-    if (!*touch) {
-        ESP_LOGE(TAG, "touch register failed");
+    /* Touch indev fed from the cache above, AIWatchOS-style. The
+     * adapter's own registration reads the chip inside lv_timer_handler;
+     * on this shared I2C bus that read wedges the handler (the frame
+     * loop stalls after its first pass), which is why AIWatchOS never
+     * reads touch from its render path either. */
+    lv_indev_t *indev = lv_indev_create();
+    if (!indev) {
+        ESP_LOGE(TAG, "touch indev create failed");
         return NULL;
     }
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev, touch_cache_read_cb);
+    lv_indev_set_display(indev, disp);
+    *touch = indev;
     return disp;
 }
 
@@ -339,9 +389,26 @@ static void set_brightness(int pct)
 
 static void panel_sleep(bool sleep)
 {
-    /* Plain SLPIN (0x10) / SLPOUT (0x11). */
-    esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | ((sleep ? 0x10 : 0x11) << 8), NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(120));
+    if (sleep) {
+        /* Plain SLPIN (0x10). */
+        esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | (0x10 << 8), NULL, 0);
+        vTaskDelay(pdMS_TO_TICKS(120));
+        return;
+    }
+    /* Wake: bare SLPOUT is NOT enough on this CO5300 - the frame came
+     * back vertically broken with the panel's lower half black (owner
+     * photo, 2026-10-13) because the boot init's page-2 trims, QSPI
+     * mode and address windows do not survive SLPIN. Replay the whole
+     * boot init table; cold boots prove it lands perfectly. */
+    for (size_t i = 0; i < sizeof(s_lcd_init) / sizeof(s_lcd_init[0]); i++) {
+        const co5300_lcd_init_cmd_t *c = &s_lcd_init[i];
+        esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | ((unsigned)c->cmd << 8),
+                                  c->data_bytes ? (void *)c->data : NULL,
+                                  c->data_bytes);
+        if (c->delay_ms) {
+            vTaskDelay(pdMS_TO_TICKS(c->delay_ms));
+        }
+    }
 }
 
 static unsigned poll_buttons(void)
@@ -409,7 +476,11 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
     /* ES8311 speaker codec on the shared I2C bus. */
     audio_codec_i2c_cfg_t es8311_i2c_cfg = {
         .port = I2C_NUM_0,
-        .addr = ES8311_CODEC_DEFAULT_ADDR >> 1,
+        /* NOT shifted: audio_codec_ctrl_i2c.c does (addr >> 1) itself,
+         * so cfg takes the 8-bit form (0x30 == 7-bit 0x18). Passing the
+         * constant pre-shifted addressed the codec at 0x0C: every
+         * transaction NACKed and audio init failed. */
+        .addr = ES8311_CODEC_DEFAULT_ADDR,
         .bus_handle = s_i2c_bus,
     };
     es8311_codec_cfg_t es8311_cfg = {
@@ -440,7 +511,8 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
      * set_mic_gain) and the driver default bias is used. */
     audio_codec_i2c_cfg_t es7210_i2c_cfg = {
         .port = I2C_NUM_0,
-        .addr = ES7210_CODEC_DEFAULT_ADDR >> 1,
+        /* 8-bit form, as above (0x80 == 7-bit 0x40). */
+        .addr = ES7210_CODEC_DEFAULT_ADDR,
         .bus_handle = s_i2c_bus,
     };
     es7210_codec_cfg_t es7210_cfg = {
@@ -481,8 +553,10 @@ static const muse_board_t s_board = {
     .diagonal_in = 2.06f,
     .talk_button = "boot",
     .aux_button = "pwr",
-    .talk_hint = { LV_ALIGN_CENTER, 0, 180 },
-    .aux_hint = { LV_ALIGN_CENTER, 0, -180 },
+    .talk_hint = { LV_ALIGN_CENTER, 0, 192 },
+    /* Top-right corner: at centre-top the power glyph sat on top of
+     * the state word and the gadget name (owner flagged the overlap). */
+    .aux_hint = { LV_ALIGN_TOP_RIGHT, -34, 30 },   /* inside the bezel corner curve (safe top 30) */
     .frame_ms = 40,
     .init = init,
     .display_start = display_start,
@@ -495,6 +569,7 @@ static const muse_board_t s_board = {
     .mic_slot = -1,
     .set_mic_gain = set_mic_gain,
     .poll_buttons = poll_buttons,
+    .poll_touch = poll_touch,
     .wait_buttons = NULL,
     .read_power = muse_pmu_read_power,
     .power_off = muse_pmu_power_off,

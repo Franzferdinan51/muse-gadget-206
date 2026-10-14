@@ -33,6 +33,12 @@
 esp_err_t muse_console_install(size_t rx_buf);
 /* Blocks for the next byte; false on a driver error. */
 bool muse_console_getc(uint8_t *c);
+/* Timed variant: false when no byte arrives within timeout_ms. */
+bool muse_console_getc_ms(uint8_t *c, int timeout_ms);
 void muse_console_write(const void *buf, size_t n);
+/* Write with a deadline: returns the bytes actually written (< n when
+ * the host stops draining). For bulk payloads that must not block the
+ * caller forever when the reader goes away. */
+size_t muse_console_write_ms(const void *buf, size_t n, int timeout_ms);
 /* A USB host is reading the port. A UART bridge can't tell: false. */
 bool muse_console_host(void);

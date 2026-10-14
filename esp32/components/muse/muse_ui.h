@@ -34,6 +34,13 @@ bool muse_ui_dark(void);
 
 /* Slide back to the face (e.g. when a talk starts). */
 void muse_ui_show_face(void);
+void muse_ui_show_settings(void);
+/* "face" or "settings": the tileview's active tile (for the bridge). */
+const char *muse_ui_current_page(void);
+/* Diagnostic: how many times the UI frame timer has fired. */
+extern volatile uint32_t muse_ui_frame_ticks;
+extern volatile uint32_t muse_ui_frame_stage;
+void muse_ui_apply_pending_brightness(void);
 /* Settings sub-pages turn off the tile swipe so they can use horizontal gestures. */
 void muse_ui_set_swipe_enabled(bool enabled);
 /* Temporarily applies a brightness while a slider is dragged. */
@@ -52,3 +59,5 @@ void muse_ui_camera_hint(bool visible);
 
 /* Bench testing, from any task: streams the screen over USB serial. */
 void muse_ui_request_snapshot(void);
+/* Ask the frame timer to stream an MDB FBDUMP (muse_mdb.c) next frame. */
+void muse_ui_request_mdb_snapshot(void);

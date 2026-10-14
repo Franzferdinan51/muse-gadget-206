@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "muse_mdb.h"
 #include "muse_input.h"
 
 #include <stdint.h>
@@ -113,6 +114,18 @@ static void set_asleep(bool asleep, const char *why)
             muse_wifi_apply();   /* the screen says reconnecting: don't sit out the backoff */
         }
     }
+}
+
+/* The bench bridge (muse_mdb.c) shares this task's actuators. */
+void muse_input_set_asleep(bool asleep)
+{
+    set_asleep(asleep, "mdb");
+}
+
+void muse_input_post_ptt(bool down)
+{
+    muse_state_poke();
+    post(down ? MUSE_PTT_DOWN : MUSE_PTT_UP, false);
 }
 
 static void toggle_phone_setup(void)
@@ -399,6 +412,8 @@ static void input_task(void *arg)
 
     for (;;) {
         unsigned ev = muse_board->poll_buttons();
+        if (muse_board->poll_touch) muse_board->poll_touch();
+        muse_ui_apply_pending_brightness();
         if (ev & (MUSE_BTN_TALK_PRESS | MUSE_BTN_TALK_RELEASE)) {
             ESP_LOGI(TAG, "talk key:%s%s", ev & MUSE_BTN_TALK_PRESS ? " press" : "",
                      ev & MUSE_BTN_TALK_RELEASE ? " release" : "");
@@ -645,17 +660,40 @@ static bool console_command(char *line, bool whole)
  * (see set_face), and "chat=" sends a typed message to Hatch (see chat_line
  * and tools/muse/chat.py).
  */
-static void serial_task(void *arg)
+static void serial_byte(uint8_t c);
+
+/* 'm' might start an MDB line ("mdb ..."): peek at the next three bytes.
+ * True if it was one (the line has been handled). Otherwise the peeked
+ * bytes are replayed through serial_byte, so the legacy bench keys keep
+ * working — a peeked byte lands a few hundred ms early, nothing more. */
+static bool sniff_mdb(void)
 {
-    if (muse_console_install(SERIAL_RX) != ESP_OK) {
-        vTaskDelete(NULL);
+    uint8_t b[3];
+    int n = 0;
+    while (n < 3 && muse_console_getc_ms(&b[n], 150)) {
+        n++;
     }
-    for (;;) {
-        uint8_t c;
-        if (!muse_console_getc(&c)) {
-            continue;
+    if (n == 3 && b[0] == 'd' && b[1] == 'b' && b[2] == ' ') {
+        char *line = heap_caps_malloc(SERIAL_LINE, MUSE_BIG_CAPS);
+        char none[1];   /* no room: the line is read and dropped */
+        bool whole = read_line(line ? line : none, line ? SERIAL_LINE : sizeof(none));
+        if (line && whole) {
+            char full[SERIAL_LINE + 4];
+            snprintf(full, sizeof(full), "mdb %s", line);
+            muse_mdb_handle_line(full);
         }
-        if (c == 'm') {
+        free(line);
+        return true;
+    }
+    for (int i = 0; i < n; i++) {
+        serial_byte(b[i]);
+    }
+    return false;
+}
+
+static void serial_byte(uint8_t c)
+{
+    if (c == 'm') {
             muse_voice_request_mp3test();
         } else if (c == 'a' || c == 's') {
             muse_state_poke();
@@ -676,6 +714,22 @@ static void serial_task(void *arg)
             muse_state_poke();
             post(c == 'd' ? MUSE_PTT_DOWN : MUSE_PTT_UP, false);
         }
+}
+
+static void serial_task(void *arg)
+{
+    if (muse_console_install(SERIAL_RX) != ESP_OK) {
+        vTaskDelete(NULL);
+    }
+    for (;;) {
+        uint8_t c;
+        if (!muse_console_getc(&c)) {
+            continue;
+        }
+        if (c == 'm' && sniff_mdb()) {
+            continue;   /* an MDB line, handled */
+        }
+        serial_byte(c);
     }
 }
 
@@ -685,8 +739,9 @@ esp_err_t muse_input_start(QueueHandle_t queue)
     if (xTaskCreate(input_task, "muse_input", 4096, NULL, 6, &s_input) != pdPASS) {
         return ESP_FAIL;
     }
+    muse_mdb_init();
     /* Bench-test and setup console; the input still works if it can't start. */
-    xTaskCreate(serial_task, "muse_serial", 3584, NULL, 5, NULL);
+    xTaskCreate(serial_task, "muse_serial", 8192, NULL, 5, NULL);   /* 3584 overflowed on sleep/wake dispatch chains (log formatting + driver + settings) */
     return ESP_OK;
 }
 

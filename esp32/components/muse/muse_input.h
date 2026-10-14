@@ -46,5 +46,9 @@ typedef struct {
 /* PTT events are posted to `queue` (items are muse_input_event_t). */
 esp_err_t muse_input_start(QueueHandle_t queue);
 
+/* The bench bridge (muse_mdb.c) shares the input task's actuators. */
+void muse_input_set_asleep(bool asleep);
+void muse_input_post_ptt(bool down);
+
 /* Plays the goodbye animation and powers off (from the input task). */
 void muse_input_request_power_off(void);

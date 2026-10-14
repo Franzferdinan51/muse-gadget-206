@@ -19,3 +19,7 @@
 # Screenshots ('p' over the serial console, tools/muse/snap.py): under 1 KB of
 # code, plus a buffer the size of the screen (RGB565) while taking one.
 CONFIG_LV_USE_SNAPSHOT=y
+
+# OTA slots cap the image at 2 MB (partitions.csv); the -O2 bench image
+# was 2,166,784 B and could never be OTA'd. -Os buys ~150 KB of .text.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

@@ -90,6 +90,11 @@ typedef struct {
     /* Called every 10 ms from the input task (50 ms while the display is
      * paused, unless wait_buttons is set); returns MUSE_BTN_* edges. */
     unsigned (*poll_buttons)(void);
+    /* Optional: service the touch controller from the input task, called
+     * every poll cycle. Boards set this when the touch read must not run
+     * inside the LVGL handler (shared-bus controllers whose reads can
+     * block); the LVGL indev then consumes a cache instead. */
+    void (*poll_touch)(void);
     /* Display paused: returns once a button changes (waking the chip from
      * light sleep), the task is notified or timeout_ms passes, so the
      * buttons needn't be polled. NULL: polled. */

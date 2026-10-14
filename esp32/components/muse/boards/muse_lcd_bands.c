@@ -36,6 +36,12 @@ typedef struct {
 
 static const char *TAG = "lcd_bands";
 
+/* Bench diagnostics (read by MDB health): where the flush chain is. */
+volatile uint32_t muse_bands_queued;
+volatile uint32_t muse_bands_chunks_sent;
+volatile uint32_t muse_bands_chunk_isrs;
+volatile uint32_t muse_bands_notifies;
+
 static lv_display_t *s_disp;
 static esp_lcd_panel_handle_t s_panel;
 static QueueHandle_t s_bands;            /* room for LVGL's band and a call */
@@ -63,9 +69,14 @@ static bool IRAM_ATTR on_chunk_sent(esp_lcd_panel_io_handle_t io, esp_lcd_panel_
     (void)io;
     (void)edata;
     (void)ctx;
+    muse_bands_chunk_isrs++;
     BaseType_t woken = pdFALSE;
     xSemaphoreGiveFromISR(s_chunk_free, &woken);
-    bool yield = chunk_done() && esp_lv_adapter_display_notify_color_trans_done_from_isr(s_disp);
+    bool last = chunk_done();
+    if (last) {
+        muse_bands_notifies++;
+    }
+    bool yield = last && esp_lv_adapter_display_notify_color_trans_done_from_isr(s_disp);
     return yield || woken == pdTRUE;
 }
 
@@ -76,6 +87,7 @@ static esp_err_t queue_band(lv_display_t *disp, esp_lcd_panel_handle_t panel, in
     (void)panel;
     (void)ctx;
     band_t b = { data, x1, y1, x2, y2 };
+    muse_bands_queued++;
     return xQueueSend(s_bands, &b, 0) == pdTRUE ? ESP_OK : ESP_FAIL;
 }
 
@@ -105,6 +117,7 @@ static void send_bands(void *arg)
             int h = b.y2 - y < rows ? b.y2 - y : rows;
             xSemaphoreTake(s_chunk_free, portMAX_DELAY);
             memcpy(s_chunk[k], b.data + (size_t)(y - b.y1) * row, h * row);
+            muse_bands_chunks_sent++;
             esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, b.x1, y, b.x2, y + h, s_chunk[k]);
             if (err != ESP_OK) {
                 xSemaphoreGive(s_chunk_free);

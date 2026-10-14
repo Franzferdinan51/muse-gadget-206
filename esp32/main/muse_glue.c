@@ -41,6 +41,7 @@
 #include "muse_link.h"
 #include "muse_mem.h"
 #include "muse_settings.h"
+#include "ota.h"
 #include "muse_state.h"
 
 static const char *TAG = "link.muse";
@@ -679,4 +680,43 @@ void muse_glue_led_state(led_state_t state) {
     muse_link_set_state(st);
     // Pairing, provisioning and unpair all move the LED; pick up their config.
     keeper_kick(KEEP_RELOAD);
+}
+
+// ---- OTA bridge (MDB verbs) --------------------------------------------
+// The bridge (components/muse/muse_mdb.c) calls these strong hooks;
+// they drive the app's own OTA service (ota.c) and remember the last
+// outcome for `mdb ota status` / health. The service's own rules all
+// still apply: HTTPS download, descriptor version gate unless forced,
+// and the 300 s control-channel validation window before a fresh
+// image is blessed - an unvalidated image reverts itself.
+
+static char s_ota_state[16] = "idle";
+static char s_ota_detail[96] = "";
+
+static void glue_ota_cb(const ota_event_t *ev, void *user)
+{
+    (void)user;
+    const char *st = ev->result == OTA_RESULT_APPLIED ? "applied"
+        : ev->result == OTA_RESULT_SKIPPED ? "skipped" : "failed";
+    strlcpy(s_ota_state, st, sizeof(s_ota_state));
+    strlcpy(s_ota_detail, ev->detail ? ev->detail : "", sizeof(s_ota_detail));
+}
+
+bool muse_mdb_ota_start(const char *url, bool force)
+{
+    if (!ota_is_enabled() || !url || !url[0]) {
+        return false;
+    }
+    strlcpy(s_ota_state, "starting", sizeof(s_ota_state));
+    s_ota_detail[0] = '\0';
+    ota_start(url, force, glue_ota_cb, NULL);
+    return true;
+}
+
+bool muse_mdb_ota_status(char *state, size_t state_len,
+                         char *detail, size_t detail_len)
+{
+    strlcpy(state, s_ota_state, state_len);
+    strlcpy(detail, s_ota_detail, detail_len);
+    return true;
 }

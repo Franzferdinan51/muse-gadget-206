@@ -36,6 +36,7 @@
 #include "muse_chat.h"
 #include "muse_console.h"
 #include "muse_link.h"
+#include "muse_mdb.h"
 #include "muse_mem.h"
 #include "muse_menu.h"
 #include "muse_pixel.h"
@@ -235,11 +236,14 @@ static lv_result_t muse_dec_get_area(lv_image_decoder_t *dec, lv_image_decoder_d
     }
     int32_t y2 = LV_MIN(y1 + STRIP_ROWS - 1, full->y2);
     int32_t w = lv_area_get_width(full);
-    lv_draw_buf_t *buf = lv_draw_buf_reshape(dsc->user_data, LV_COLOR_FORMAT_RGB565, w, y2 - y1 + 1, LV_STRIDE_AUTO);
+    lv_draw_buf_t *buf = lv_draw_buf_reshape(dsc->user_data, LV_COLOR_FORMAT_RGB565A8, w, y2 - y1 + 1, LV_STRIDE_AUTO);
     if (!buf) {
         return LV_RESULT_INVALID;
     }
     muse_pixel_scale((uint16_t *)buf->data, buf->header.stride / sizeof(uint16_t), full->x1, full->x2, y1, y2);
+    /* The A8 plane follows the colour plane (alpha stride = colour stride / 2). */
+    uint8_t *alpha = buf->data + buf->header.stride * (uint32_t)(y2 - y1 + 1);
+    muse_pixel_scale_alpha(alpha, buf->header.stride / 2, full->x1, full->x2, y1, y2);
     area->x1 = full->x1;
     area->x2 = full->x2;
     area->y1 = y1;
@@ -261,7 +265,7 @@ static void muse_dec_close(lv_image_decoder_t *dec, lv_image_decoder_dsc_t *dsc)
 static void muse_image_init(void)
 {
     s_muse_src.header.magic = LV_IMAGE_HEADER_MAGIC;
-    s_muse_src.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_muse_src.header.cf = LV_COLOR_FORMAT_RGB565A8;   /* bg cells transparent: no black box */
     s_muse_src.header.w = s_canvas_px;
     s_muse_src.header.h = s_canvas_px;
     s_muse_src.header.stride = s_canvas_px * sizeof(uint16_t);
@@ -269,7 +273,7 @@ static void muse_image_init(void)
     muse_pixel_set_size(s_canvas_px);
 
     for (int i = 0; i < STRIPS; i++) {
-        s_strips[i] = lv_draw_buf_create(s_canvas_px, STRIP_ROWS, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
+        s_strips[i] = lv_draw_buf_create(s_canvas_px, STRIP_ROWS, LV_COLOR_FORMAT_RGB565A8, LV_STRIDE_AUTO);
         assert(s_strips[i]);
     }
     lv_image_decoder_t *dec = lv_image_decoder_create();
@@ -616,7 +620,7 @@ static void set_answer(int which)
             lv_obj_add_flag(l->hides[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
-    if (!muse_board->round) {
+    if (!muse_board->round && s_ring) {
         lv_obj_set_flag(s_ring, LV_OBJ_FLAG_HIDDEN, l != NULL);   /* the reply runs past a rectangle's ring */
     }
     if (l) {
@@ -819,8 +823,11 @@ static void build_screen(void)
         face = s_face;
     }
 
-    if (!s_small) {
-        /* Progress ring around the bezel. */
+    if (!s_small && muse_board->round) {
+        /* Progress ring around the bezel - round faces only. On a
+         * rectangle the circle is decoration without a job (the owner
+         * called it useless and asked for it gone), and the reply
+         * layout already hides it there whenever text shows. */
         int d = (s_w < s_h ? s_w : s_h) - 8;
         s_ring = lv_arc_create(face);
         lv_obj_set_size(s_ring, d, d);
@@ -859,7 +866,7 @@ static void build_screen(void)
      */
     int ring_in = (s_w < s_h ? s_w : s_h) / 2 - 10;   /* the ring's inner edge */
     int cap_h = 2 * lv_font_get_line_height(caption_font()) + CAPTION_LINE_SPACE;
-    int cap_bottom = 179;                              /* a 466 px circle's; fine for rectangles */
+    int cap_bottom = 170;                              /* a 466 px circle's; fine for rectangles */
     if (muse_board->round) {
         cap_bottom = (int)sqrtf((float)(ring_in * ring_in - CAPTION_W * CAPTION_W / 4)) - 3;
     }
@@ -877,7 +884,7 @@ static void build_screen(void)
     lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_canvas, on_canvas_clicked, LV_EVENT_CLICKED, NULL);
     if (s_ring) {
-        /* The canvas's black corners reach the bezel; keep the ring on top. */
+        /* The ring rides over the canvas's edge. */
         lv_obj_move_foreground(s_ring);
     }
     if (s_gloss) {
@@ -910,7 +917,9 @@ static void build_screen(void)
      * Muse app. update_chrome() fills it in, shortens it to the hex tail on a
      * screen too narrow for the whole thing, and empties it once paired. */
     s_name_lbl = make_label(face, s_small ? FONT_COMPACT : MUSE_FONT_16, COLOR_DIM);
-    lv_obj_align(s_name_lbl, LV_ALIGN_TOP_MID, 0, s_small ? 32 : 60 + s_dy);
+    /* Below the state label's real box: at a flat 60 this struck
+     * through the state word (40 + a ~33px line). */
+    lv_obj_align(s_name_lbl, LV_ALIGN_TOP_MID, 0, s_small ? 32 : 44 + s_dy + lv_font_get_line_height(MUSE_FONT_STATE));
     /* Same rule as the state label: a square 128 px screen centres Muse over
      * these rows, so there's nowhere to put this without covering the face. */
     lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
@@ -1119,12 +1128,65 @@ static void build_overlays(void)
     }
 }
 
+static volatile int s_pending_brightness = -1;
+static volatile int s_pending_panel_sleep = -1;  /* -1 none, 0 wake, 1 sleep */
+
 static void apply_brightness(int pct)
 {
     if (pct != s_brightness) {
-        muse_board->set_brightness(pct);
+        /* Defer the panel write to the input task (see
+         * muse_ui_apply_pending_brightness). set_brightness() issues a
+         * QSPI transaction on the same panel bus the bands flusher is
+         * using; issuing it from inside the LVGL handler (which runs
+         * under the adapter lock mid-frame pipeline) deadlocks the
+         * worker against the flush pipeline - the frame loop wedged
+         * inside the first frame_tick here. */
+        s_pending_brightness = pct;
         s_brightness = pct;
     }
+}
+
+/* Called from the input task: performs deferred panel writes outside
+ * the LVGL handler. Ordering matches the old in-handler sequence:
+ * going dark -> brightness first, then SLPIN; waking -> SLPOUT first,
+ * then brightness. The writes run under the display lock: they share
+ * the QSPI bus with the bands flusher, and an unlocked SLPIN landing
+ * mid-flush wedges the LVGL worker on a DMA that never completes
+ * (the panel is asleep) with the adapter lock held forever. If the
+ * lock is busy, the next input loop retries. */
+void muse_ui_apply_pending_brightness(void)
+{
+    int ps = s_pending_panel_sleep;
+    int pb = s_pending_brightness;
+    if (ps < 0 && pb < 0) {
+        return;
+    }
+    if (!muse_board->display_lock(50)) {
+        return;
+    }
+    if (ps == 1) {
+        if (pb >= 0) {
+            s_pending_brightness = -1;
+            muse_board->set_brightness(pb);
+        }
+        s_pending_panel_sleep = -1;
+        if (muse_board->panel_sleep) {
+            muse_board->panel_sleep(true);
+        }
+    } else if (ps == 0) {
+        s_pending_panel_sleep = -1;
+        if (muse_board->panel_sleep) {
+            muse_board->panel_sleep(false);
+        }
+        if (pb >= 0) {
+            s_pending_brightness = -1;
+            muse_board->set_brightness(pb);
+        }
+    } else if (pb >= 0) {
+        s_pending_brightness = -1;
+        muse_board->set_brightness(pb);
+    }
+    muse_board->display_unlock();
 }
 
 bool muse_ui_dark(void)
@@ -1139,20 +1201,29 @@ static bool update_sleep(void)
     if (asleep && !s_dark) {
         muse_menu_close();
         apply_brightness(0);
-        if (muse_board->panel_sleep) {
-            muse_board->panel_sleep(true);
-        }
+        /* Deferred to the input task: panel_sleep() is a QSPI
+         * tx_param on the panel bus (+120 ms) - calling it from inside
+         * the LVGL handler deadlocks the frame worker, same as
+         * set_brightness did. See muse_ui_apply_pending_brightness. */
+        s_pending_panel_sleep = 1;
         lv_obj_set_style_bg_opa(s_cover, LV_OPA_COVER, 0);
         lv_obj_remove_flag(s_cover, LV_OBJ_FLAG_HIDDEN);
         s_dark = true;
     } else if (!asleep && s_dark) {
         s_dark = false;
-        if (muse_board->panel_sleep) {
-            muse_board->panel_sleep(false);
-        }
+        s_pending_panel_sleep = 0;  /* deferred, as above */
         /* Woken by a button: drop the cover now. Woken by touch: on release. */
         if (lv_obj_get_style_bg_opa(s_cover, 0) == LV_OPA_COVER) {
             lv_obj_add_flag(s_cover, LV_OBJ_FLAG_HIDDEN);
+        }
+        /* The last frame flushed before SLPIN was the black cover, and
+         * panel GRAM keeps showing it: LVGL would only repaint areas
+         * that change, leaving black slabs around the animated face
+         * after a wake. Force one full repaint so the wake frame is
+         * complete. */
+        lv_obj_invalidate(lv_screen_active());
+        if (s_tv) {
+            lv_obj_invalidate(s_tv);
         }
     }
     if (!s_dark) {
@@ -1352,7 +1423,7 @@ static void update_status(muse_mode_t mode, float now)
         lv_obj_set_style_text_color(s_state_lbl, lv_color_hex(accent), 0);
         if (s_ring) {
             lv_obj_set_style_arc_color(s_ring, lv_color_hex(accent), LV_PART_INDICATOR);
-        } else {
+        } else if (s_bar) {
             lv_obj_set_style_bg_color(s_bar, lv_color_hex(accent), 0);
         }
         set_mic_color(mode == MUSE_MODE_LISTENING ? accent : COLOR_DIM);   /* lights up while recording */
@@ -1381,7 +1452,7 @@ static void update_status(muse_mode_t mode, float now)
             lv_arc_set_value(s_ring, ring);
             s_ring_value = ring;
         }
-    } else {
+    } else if (s_bar) {
         /* Bar along the bottom edge; a sliding segment while thinking. */
         int x = mode == MUSE_MODE_THINKING ? (int)(now * s_w) % s_w : 0;
         int w = ring * s_w / RING_RANGE;
@@ -1484,14 +1555,31 @@ void muse_ui_request_snapshot(void)
     s_snapshot = true;
 }
 
+static volatile bool s_mdb_snapshot;
+
+void muse_ui_request_mdb_snapshot(void)
+{
+    s_mdb_snapshot = true;
+}
+
+volatile uint32_t muse_ui_frame_ticks;
+volatile uint32_t muse_ui_frame_stage;
+
 static void frame_tick(lv_timer_t *timer)
 {
+    muse_ui_frame_ticks++;
+    muse_ui_frame_stage = 1;
     if (s_snapshot) {
         s_snapshot = false;
         send_snapshot();
     }
+    if (s_mdb_snapshot) {
+        s_mdb_snapshot = false;
+        muse_mdb_stream_snapshot();
+    }
     (void)timer;
     image_sync();
+    muse_ui_frame_stage = 2;
     float mode_t;
     muse_mode_t mode = muse_state_mode(&mode_t);
     float now = (float)esp_timer_get_time() / 1e6f;
@@ -1504,11 +1592,15 @@ static void frame_tick(lv_timer_t *timer)
         s_last_mode = mode;
     }
     if (update_sleep()) {
+        muse_ui_frame_stage = 8;
         return;
     }
+    muse_ui_frame_stage = 3;
     update_chrome(now);
+    muse_ui_frame_stage = 4;
     if (muse_menu_tick(now)) {
         image_hide_locked();
+        muse_ui_frame_stage = 9;
         return;   /* the menu covers the face */
     }
     if (s_image_dsc.data) {
@@ -1531,10 +1623,13 @@ static void frame_tick(lv_timer_t *timer)
         .level = s_level,
         .happy = muse_state_happiness(),
     };
+    muse_ui_frame_stage = 5;
     muse_pixel_render(&pose);
+    muse_ui_frame_stage = 6;
     invalidate_muse();
 
     update_status(mode, now);
+    muse_ui_frame_stage = 7;
 }
 
 esp_err_t muse_ui_start(void)
@@ -1596,6 +1691,23 @@ void muse_ui_show_face(void)
     }
     lv_obj_add_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE);
     lv_tileview_set_tile(s_tv, s_face, LV_ANIM_ON);
+}
+
+void muse_ui_show_settings(void)
+{
+    if (!s_tv || !s_settings) {
+        return;
+    }
+    lv_obj_add_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE);
+    lv_tileview_set_tile(s_tv, s_settings, LV_ANIM_ON);
+}
+
+const char *muse_ui_current_page(void)
+{
+    if (s_tv && s_settings && lv_tileview_get_tile_active(s_tv) == s_settings) {
+        return "settings";
+    }
+    return "face";
 }
 
 void muse_ui_set_swipe_enabled(bool enabled)

@@ -55,3 +55,18 @@ void muse_pixel_set_size(int px);
  * image never has to exist in RAM.
  */
 void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int y1);
+
+/*
+ * Optional backdrop hook: when set, background (C_BG) cells are written
+ * with fn(grid_row) instead of the palette's black, so the character
+ * sits directly on the caller's backdrop. NULL (the default) restores
+ * black. The colour is sampled once per grid row.
+ */
+void muse_pixel_set_bg_hook(uint16_t (*fn)(int grid_row));
+
+/*
+ * Alpha companion to muse_pixel_scale for RGB565A8 targets: writes the
+ * coverage byte for each pixel of [x0, x1] x [y0, y1] - 0 for background
+ * cells, partial for the aura/shadow, 255 for the character itself.
+ */
+void muse_pixel_scale_alpha(uint8_t *dst, int stride_px, int x0, int x1, int y0, int y1);

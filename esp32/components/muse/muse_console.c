@@ -26,6 +26,12 @@ esp_err_t muse_console_install(size_t rx_buf)
 {
     usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     cfg.rx_buffer_size = rx_buf;
+    /* The default TX ring is 256 B, and the driver's xRingbufferSend
+     * drops any single write larger than the ring - silently (the
+     * return value was ignored for a day of "corrupt screenshots"
+     * that were really console spam filling counted host reads).
+     * Bulk payloads (framebuffer dumps, log blobs) need a real ring. */
+    cfg.tx_buffer_size = 16384;
     return usb_serial_jtag_driver_install(&cfg);
 }
 
@@ -34,9 +40,40 @@ bool muse_console_getc(uint8_t *c)
     return usb_serial_jtag_read_bytes(c, 1, portMAX_DELAY) == 1;
 }
 
+bool muse_console_getc_ms(uint8_t *c, int timeout_ms)
+{
+    return usb_serial_jtag_read_bytes(c, 1, pdMS_TO_TICKS(timeout_ms)) == 1;
+}
+
 void muse_console_write(const void *buf, size_t n)
 {
-    usb_serial_jtag_write_bytes(buf, n, portMAX_DELAY);
+    /* Chunked: one driver call is one ringbuffer item and must stay
+     * well under the TX ring's capacity to be accepted at all. */
+    const uint8_t *p = buf;
+    while (n) {
+        size_t take = n > 4096 ? 4096 : n;
+        int w = usb_serial_jtag_write_bytes(p, take, portMAX_DELAY);
+        if (w <= 0) {
+            break;
+        }
+        p += w;
+        n -= (size_t)w;
+    }
+}
+
+size_t muse_console_write_ms(const void *buf, size_t n, int timeout_ms)
+{
+    const uint8_t *p = buf;
+    size_t sent = 0;
+    while (sent < n) {
+        size_t take = n - sent > 4096 ? 4096 : n - sent;
+        int w = usb_serial_jtag_write_bytes(p + sent, take, pdMS_TO_TICKS(timeout_ms));
+        if (w <= 0) {
+            break;
+        }
+        sent += (size_t)w;
+    }
+    return sent;
 }
 
 bool muse_console_host(void)
@@ -141,9 +178,21 @@ bool muse_console_getc(uint8_t *c)
     return true;
 }
 
+bool muse_console_getc_ms(uint8_t *c, int timeout_ms)
+{
+    return uart_read_bytes(PORT, c, 1, pdMS_TO_TICKS(timeout_ms)) == 1;
+}
+
 void muse_console_write(const void *buf, size_t n)
 {
     uart_write_bytes(PORT, buf, n);
+}
+
+size_t muse_console_write_ms(const void *buf, size_t n, int timeout_ms)
+{
+    (void)timeout_ms;
+    uart_write_bytes(PORT, buf, n);
+    return n;
 }
 
 bool muse_console_host(void)

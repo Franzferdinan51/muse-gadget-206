@@ -96,6 +96,23 @@ static bool s_scheme_init;
 static uint16_t s_pal[C_COUNT];
 static uint16_t s_pal_dim[C_COUNT];
 
+static uint16_t (*s_bg_hook)(int grid_row);
+
+void muse_pixel_set_bg_hook(uint16_t (*fn)(int grid_row))
+{
+    s_bg_hook = fn;
+}
+
+/* The palette's dim LUT scales by 0.72 in RGB space; close enough in 565. */
+static uint16_t dim565(uint16_t c)
+{
+    uint32_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
+    r = r * 72 / 100;
+    g = g * 72 / 100;
+    b = b * 72 / 100;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
 static uint8_t s_fb[W * H];
 static uint8_t s_mask[W * H];
 
@@ -863,16 +880,46 @@ void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int 
             continue;
         }
         const uint8_t *row = &s_fb[(m & 0x7f) * W];
+        const uint16_t bg = s_bg_hook ? s_bg_hook(m & 0x7f) : 0;
+        const uint16_t bgd = dim565(bg);
         if (m & 0x80) {
             for (int i = 0; i < n; i++) {
-                dst[i] = s_pal_dim[row[xmap[i] & 0x7f]];
+                uint8_t c = row[xmap[i] & 0x7f];
+                dst[i] = (c == C_BG && s_bg_hook) ? bgd : s_pal_dim[c];
             }
         } else {
             for (int i = 0; i < n; i++) {
                 uint8_t xm = xmap[i];
                 uint8_t c = row[xm & 0x7f];
-                dst[i] = xm & 0x80 ? s_pal_dim[c] : s_pal[c];
+                dst[i] = (c == C_BG && s_bg_hook) ? (xm & 0x80 ? bgd : bg)
+                         : (xm & 0x80 ? s_pal_dim[c] : s_pal[c]);
             }
+        }
+        prev = dst;
+        prev_m = m;
+    }
+}
+
+void muse_pixel_scale_alpha(uint8_t *dst, int stride_px, int x0, int x1, int y0, int y1)
+{
+    int n = x1 - x0 + 1;
+    const uint8_t *xmap = &s_map[x0];
+    const uint8_t *prev = NULL;
+    uint8_t prev_m = 0;
+    for (int y = y0; y <= y1; y++, dst += stride_px) {
+        uint8_t m = s_map[y];
+        if (prev && m == prev_m) {
+            memcpy(dst, prev, (size_t)n);
+            continue;
+        }
+        const uint8_t *row = &s_fb[(m & 0x7f) * W];
+        for (int i = 0; i < n; i++) {
+            uint8_t c = row[xmap[i] & 0x7f];
+            dst[i] = c == C_BG ? 0
+                     : c == C_SHADOW ? 110
+                     : c == C_AURA1 ? 150
+                     : c == C_AURA2 ? 90
+                                    : 255;
         }
         prev = dst;
         prev_m = m;
