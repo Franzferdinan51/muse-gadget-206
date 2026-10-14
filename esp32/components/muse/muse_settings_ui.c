@@ -53,13 +53,20 @@
 #define COLOR_WARN MUSE_WARN
 #define COLOR_DANGER MUSE_DANGER
 
+/* Wireless-update hooks: strong symbols live in the app glue
+ * (esp32/main/muse_glue.c). Weak so this component links standalone. */
+extern void muse_ota_check_now(void) __attribute__((weak));
+extern const char *muse_ota_auto_status(void) __attribute__((weak));
+
+static lv_obj_t *s_upd_version, *s_upd_status;
+
 typedef void (*text_done_cb_t)(const char *text);
 
 /* The screen size the text page is scaled to (see text_px). */
 static int s_text_scale = 466;
 static lv_obj_t *s_tile;
 static lv_obj_t *s_current;
-static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text;
+static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text, *s_update;
 
 /*
  * Only home is kept. A sub-page is built when it opens and deleted on the way
@@ -72,7 +79,7 @@ typedef struct {
 } page_t;
 
 /* Home values. */
-static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
+static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_home_update, *s_about;
 
 /* Wi-Fi page. */
 static lv_obj_t *s_wifi_sw, *s_wifi_status, *s_wifi_saved, *s_wifi_scan_btn, *s_wifi_scan_lbl, *s_wifi_list;
@@ -1232,6 +1239,42 @@ static void build_power_page(lv_obj_t *tile)
     note(list, text);
 }
 
+
+/* ---------- Software update ---------- */
+
+static void on_update_check(lv_event_t *e)
+{
+    (void)e;
+    if (muse_ota_check_now) {
+        muse_ota_check_now();
+        set_text(s_upd_status, "Checking...");
+    } else {
+        set_text(s_upd_status, "Not available in this build");
+    }
+}
+
+static void build_update_page(lv_obj_t *tile)
+{
+    lv_obj_t *list;
+    s_update = page(tile, "SOFTWARE UPDATE", true, &list);
+    s_upd_version = info_row(list, "Current version");
+    s_upd_status = info_row(list, "Status");
+    button(list, LV_SYMBOL_REFRESH "  Check for updates", MUSE_BLUE, on_update_check, NULL);
+    note(list, "Muse also checks on its own every 6 hours. An update downloads, "
+               "restarts the watch, and is kept only if it boots healthy.");
+}
+
+static void tick_update(void)
+{
+    set_text(s_upd_version, esp_app_get_description()->version);
+    if (muse_ota_auto_status) {
+        const char *s = muse_ota_auto_status();
+        if (s && s[0]) {
+            set_text(s_upd_status, s);
+        }
+    }
+}
+
 /* ---------- Home ---------- */
 
 static const page_t WIFI = { &s_wifi, build_wifi_page };
@@ -1241,6 +1284,7 @@ static const page_t SOUND = { &s_sound, build_sound_page };
 static const page_t SLEEP = { &s_sleep, build_sleep_page };
 static const page_t BATTERY = { &s_battery, build_battery_page };
 static const page_t POWER = { &s_power, build_power_page };
+static const page_t UPDATE = { &s_update, build_update_page };
 
 static void build_home(lv_obj_t *tile)
 {
@@ -1252,6 +1296,7 @@ static void build_home(lv_obj_t *tile)
     row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
     row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
     row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
+    row(list, LV_SYMBOL_DOWNLOAD, "Software update", &s_home_update, on_nav, (void *)&UPDATE);
     row(list, LV_SYMBOL_POWER, "Power off", NULL, on_nav, (void *)&POWER);
     s_about = note(list, "");
 }
@@ -1286,6 +1331,7 @@ static void tick_home(void)
         snprintf(buf, sizeof(buf), "%s%d%%", p.charging ? LV_SYMBOL_CHARGE " " : "", p.battery_pct);
     }
     set_text(s_home_battery, buf);
+    set_text(s_home_update, esp_app_get_description()->version);
 
     snprintf(buf, sizeof(buf), "Muse %s  -  %s", esp_app_get_description()->version,
              w.state == MUSE_WIFI_CONNECTED ? w.ip : "offline");
@@ -1329,6 +1375,8 @@ void muse_settings_ui_tick(bool visible)
         tick_sleep();
     } else if (s_current == s_battery) {
         tick_battery();
+    } else if (s_current == s_update) {
+        tick_update();
     }
 }
 

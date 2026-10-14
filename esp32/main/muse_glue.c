@@ -54,6 +54,7 @@ static const char *TAG = "link.muse";
 #define BIT_STORAGE     BIT0    // NVS + identity ready: Muse may start
 #define BIT_LINK        BIT1    // boot connect done: Muse may use the radios
 #define BIT_MUSE        BIT2    // Muse settings loaded
+#define BIT_OTA_CHECK   BIT3    // manual "check for updates" nudge
 
 #define KEEP_WIFI       BIT0    // wifi on/off or network changed
 #define KEEP_BLE        BIT1    // phone setup setting changed
@@ -685,12 +686,35 @@ static esp_err_t ota_auto_http_evt(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+static char s_ota_auto_status[64];
+
+static void ota_auto_set_status(const char *s)
+{
+    strlcpy(s_ota_auto_status, s, sizeof(s_ota_auto_status));
+}
+
+// Read by the Settings > Software update page (weak ref there).
+const char *muse_ota_auto_status(void)
+{
+    return s_ota_auto_status;
+}
+
+// Settings > Software update > "Check for updates" (weak ref there).
+void muse_ota_check_now(void)
+{
+    if (s_ready) {
+        xEventGroupSetBits(s_ready, BIT_OTA_CHECK);
+    }
+}
+
 static void ota_auto_check_once(void)
 {
     if (!wifi_mgr_is_connected()) {
         ESP_LOGI(TAG, "ota auto: wifi down, skipping check");
+        ota_auto_set_status("Wi-Fi is off - cannot check");
         return;
     }
+    ota_auto_set_status("Checking...");
     char *buf = (char *)malloc(OTA_AUTO_BUF);
     if (!buf) return;
     ota_auto_sink_t sink = { .buf = buf, .cap = OTA_AUTO_BUF, .len = 0 };
@@ -710,6 +734,7 @@ static void ota_auto_check_once(void)
     if (err != ESP_OK || status != 200) {
         ESP_LOGW(TAG, "ota auto: manifest fetch failed (%s, http %d)",
                  esp_err_to_name(err), status);
+        ota_auto_set_status("Check failed - try again");
         free(buf);
         return;
     }
@@ -736,6 +761,8 @@ static void ota_auto_check_once(void)
     const char *running = esp_app_get_description()->version;
     if (!ota_auto_ver_newer(version, running)) {
         ESP_LOGI(TAG, "ota auto: %s is the latest (running %s)", version, running);
+        snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
+                 "Up to date (%.40s)", running);
         return;
     }
     nvs_handle_t nv;
@@ -745,6 +772,8 @@ static void ota_auto_check_once(void)
         nvs_get_str(nv, OTA_AUTO_NVS_KEY, tried, &n);
         if (strcmp(tried, version) == 0) {
             ESP_LOGW(TAG, "ota auto: %s already attempted once; not retrying", version);
+            snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
+                     "%.40s already tried once", version);
             nvs_close(nv);
             return;
         }
@@ -755,6 +784,8 @@ static void ota_auto_check_once(void)
         nvs_close(nv);
     }
     ESP_LOGI(TAG, "ota auto: updating %s -> %s", running, version);
+    snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
+             "Updating to %.40s...", version);
     muse_mdb_ota_start(url, false);
 }
 
@@ -762,10 +793,12 @@ static void ota_auto_task(void *arg)
 {
     (void)arg;
     xEventGroupWaitBits(s_ready, BIT_LINK, pdFALSE, pdTRUE, portMAX_DELAY);
-    vTaskDelay(pdMS_TO_TICKS(OTA_AUTO_FIRST_MS));
+    TickType_t wait = pdMS_TO_TICKS(OTA_AUTO_FIRST_MS);
     for (;;) {
+        // Wake on the schedule, or at once when Settings asks.
+        xEventGroupWaitBits(s_ready, BIT_OTA_CHECK, pdTRUE, pdFALSE, wait);
+        wait = pdMS_TO_TICKS(OTA_AUTO_PERIOD_MS);
         ota_auto_check_once();
-        vTaskDelay(pdMS_TO_TICKS(OTA_AUTO_PERIOD_MS));
     }
 }
 
