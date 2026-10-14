@@ -145,7 +145,7 @@ extern const uint8_t juno_typing_end[] asm("_binary_juno_typing_gif_end");
 /* The Juno GIF face: 1 = animated clips, 0 = parked (owner call,
  * 2026-10-14 - the pixel character is the face until we design a
  * purpose-built avatar). Assets and sync plumbing stay in tree. */
-#define MUSE_JUNO_GIF_FACE 0
+#define MUSE_JUNO_GIF_FACE 1
 
 static lv_obj_t *s_juno;
 static lv_img_dsc_t s_juno_dsc[JUNO_CLIPS];
@@ -1770,14 +1770,17 @@ static void juno_sync(muse_mode_t mode)
     if (!s_juno) {
         return;
     }
-#if !MUSE_JUNO_GIF_FACE
-    (void)mode;
-    if (!lv_obj_has_flag(s_juno, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_add_flag(s_juno, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
+    /* Face selection: the GIF clips are the default face, the pixel
+     * character the alternative - Settings > Display or
+     * `settings set avatar gif|pixel`, polled here so it applies
+     * live. The compile-time gate can still park the clips. */
+    if (!MUSE_JUNO_GIF_FACE || muse_settings_avatar() != MUSE_AVATAR_GIF) {
+        if (!lv_obj_has_flag(s_juno, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(s_juno, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
     }
-    return;
-#endif
     static const int clip_for_mode[MUSE_MODE_COUNT] = { 1, 0, 1, 3, 2, 1, 1 };
     bool overlay = s_image_dsc.data != NULL || s_gif_dsc.data != NULL;
     bool want = s_answer < 0 && !overlay;

@@ -104,7 +104,7 @@ static int64_t s_link_reset_armed_us;
 static lv_obj_t *s_ble_sw, *s_ble_status;
 
 /* Sound page. */
-static lv_obj_t *s_spk_sw, *s_vol_val, *s_vol_sl, *s_gain_val, *s_gain_sl, *s_bright_val, *s_bright_sl, *s_mic_bar, *s_mic_val;
+static lv_obj_t *s_spk_sw, *s_vol_val, *s_vol_sl, *s_gain_val, *s_gain_sl, *s_bright_val, *s_bright_sl, *s_avatar_sw, *s_mic_bar, *s_mic_val;
 
 /* Sleep page. */
 static const int SLEEP_CHOICES[] = { 0, 30, 60, 120, 300, 600 };
@@ -1040,12 +1040,20 @@ static void set_val(lv_obj_t *l, const char *fmt, int v);
 
 /* ---------- Display ---------- */
 
+static void on_avatar_sw(lv_event_t *e)
+{
+    muse_settings_set_avatar(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED)
+                                 ? MUSE_AVATAR_GIF : MUSE_AVATAR_PIXEL);
+}
+
 static void build_display_page(lv_obj_t *tile)
 {
     lv_obj_t *list;
     s_display = page(tile, "DISPLAY", true, &list);
     s_bright_sl = slider(list, "Brightness", 10, 100, muse_settings_brightness(), &s_bright_val, on_bright);
     set_val(s_bright_val, "%d%%", muse_settings_brightness());
+    /* On = the Juno GIF face, off = the pixel character. */
+    s_avatar_sw = switch_row(list, "Juno GIF avatar", muse_settings_avatar() == MUSE_AVATAR_GIF, on_avatar_sw);
 }
 
 /* ---------- Sound ---------- */

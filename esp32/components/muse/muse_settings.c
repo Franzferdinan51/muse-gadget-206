@@ -39,6 +39,7 @@ static struct {
     uint16_t sleep_s;
     bool wifi_on;
     bool ble_on;
+    uint8_t avatar;
     char ssid[MUSE_SSID_MAX + 1];
     char pass[MUSE_PASS_MAX + 1];
     char host[MUSE_HOST_MAX + 1];
@@ -51,6 +52,7 @@ static struct {
     .brightness = 100,
     .sleep_s = 120,
     .wifi_on = true,
+    .avatar = MUSE_AVATAR_GIF,
     .host = DEFAULT_HOST,
 };
 
@@ -120,6 +122,8 @@ esp_err_t muse_settings_init(void)
     }
     load_u8("mic_gain", &s.mic_gain);
     load_u8("bright", &s.brightness);
+    load_u8("avatar", &s.avatar);
+    if (s.avatar > MUSE_AVATAR_PIXEL) { s.avatar = MUSE_AVATAR_GIF; }
     nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
     if (nvs_get_u8(s_nvs, "wifi_on", &b) == ESP_OK) {
         s.wifi_on = b;
@@ -152,6 +156,7 @@ int muse_settings_volume(void) { int v; LOCKED(v = s.volume); return v; }
 bool muse_settings_speaker_on(void) { bool v; LOCKED(v = s.speaker_on); return v; }
 int muse_settings_mic_gain(void) { int v; LOCKED(v = s.mic_gain); return v; }
 int muse_settings_brightness(void) { int v; LOCKED(v = s.brightness); return v; }
+int muse_settings_avatar(void) { int v; LOCKED(v = s.avatar); return v; }
 int muse_settings_sleep_s(void) { int v; LOCKED(v = s.sleep_s); return v; }
 bool muse_settings_wifi_on(void) { bool v; LOCKED(v = s.wifi_on); return v; }
 bool muse_settings_ble_on(void) { bool v; LOCKED(v = s.ble_on); return v; }
@@ -221,6 +226,14 @@ void muse_settings_set_brightness(int pct)
     LOCKED(s.brightness = v);
     save_u8("bright", (uint8_t)v);
     notify(MUSE_SETTING_BRIGHTNESS);
+}
+
+void muse_settings_set_avatar(int which)
+{
+    int v = clampi(which, MUSE_AVATAR_GIF, MUSE_AVATAR_PIXEL);
+    LOCKED(s.avatar = (uint8_t)v);
+    save_u8("avatar", (uint8_t)v);
+    notify(MUSE_SETTING_AVATAR);
 }
 
 void muse_settings_set_sleep_s(int secs)
