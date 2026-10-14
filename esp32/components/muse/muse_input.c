@@ -782,12 +782,18 @@ static void serial_task(void *arg)
 esp_err_t muse_input_start(QueueHandle_t queue)
 {
     s_queue = queue;
-    if (xTaskCreate(input_task, "muse_input", 4096, NULL, 6, &s_input) != pdPASS) {
+    if (xTaskCreateWithCaps(input_task, "muse_input", 4096, NULL, 6, &s_input,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         return ESP_FAIL;
     }
     muse_mdb_init();
     /* Bench-test and setup console; the input still works if it can't start. */
-    xTaskCreate(serial_task, "muse_serial", 8192, NULL, 5, NULL);   /* 3584 overflowed on sleep/wake dispatch chains (log formatting + driver + settings) */
+    /* Stack in PSRAM: internal RAM is the scarce pool (the audio
+     * DMA race is what internal starvation looks like); this task
+     * does no DMA or flash work itself. Size unchanged - 3584
+     * overflowed here once. */
+    xTaskCreateWithCaps(serial_task, "muse_serial", 8192, NULL, 5, NULL,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);   /* 3584 overflowed on sleep/wake dispatch chains (log formatting + driver + settings) */
     return ESP_OK;
 }
 

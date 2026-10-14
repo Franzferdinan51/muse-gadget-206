@@ -339,7 +339,7 @@ static esp_err_t op_wifi_scan(void) {
     if (!(xEventGroupGetBits(s_ready) & BIT_LINK) || s_joining) return ESP_ERR_INVALID_STATE;
     if (s_scanning) return ESP_OK;
     s_scanning = true;
-    if (xTaskCreate(scan_task, "muse_scan", 4096, NULL, 4, NULL) != pdPASS) {
+    if (xTaskCreateWithCaps(scan_task, "muse_scan", 4096, NULL, 4, NULL, MUSE_BIG_CAPS) != pdPASS) {
         s_scanning = false;
         return ESP_ERR_NO_MEM;
     }
@@ -853,12 +853,12 @@ void muse_glue_start(void) {
     // Pinned to the UI core, so the display's SPI interrupt, set up in it,
     // lands beside the task that sends to the display (muse_lcd_bands.h).
     if (xTaskCreatePinnedToCore(boot_task, "muse_boot", 8192, NULL, 5, NULL, MUSE_UI_CORE) != pdPASS
-        || xTaskCreate(keeper_task, "muse_keep", 6144, NULL, 4, &s_keeper) != pdPASS) {
+        || xTaskCreateWithCaps(keeper_task, "muse_keep", 6144, NULL, 4, &s_keeper, MUSE_BIG_CAPS) != pdPASS) {
         ESP_LOGE(TAG, "failed to start Muse tasks");
     }
 #if CONFIG_HOMEHUB_OTA_ENABLED
     if (CONFIG_MUSEOS_OTA_MANIFEST_URL[0]
-        && xTaskCreate(ota_auto_task, "ota_auto", 8192, NULL, 3, NULL) != pdPASS) {
+        && xTaskCreateWithCaps(ota_auto_task, "ota_auto", 8192, NULL, 3, NULL, MUSE_BIG_CAPS) != pdPASS) {
         ESP_LOGW(TAG, "ota auto: task start failed");
     }
 #endif
