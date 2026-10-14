@@ -281,6 +281,34 @@ static void talk_button(unsigned ev)
     s_talk_down = talk_down;
 }
 
+/* On-screen push-to-talk (touch boards): the face's mic hit-area posts
+ * the same PTT events as the physical talk button. It deliberately does
+ * NOT go through muse_link_talk_press(): pairing confirmation stays a
+ * physical press, per the confirm-press policy. */
+static bool s_screen_talk_down;
+
+void muse_input_screen_talk(bool down)
+{
+    if (down) {
+        if (s_screen_talk_down || s_talk_down) {
+            return;
+        }
+        s_screen_talk_down = true;
+        if (muse_state_asleep()) {
+            set_asleep(false, "screen talk");
+            post(MUSE_PTT_DOWN, true);
+        } else {
+            post(MUSE_PTT_DOWN, false);
+        }
+    } else {
+        if (!s_screen_talk_down) {
+            return;
+        }
+        s_screen_talk_down = false;
+        post(MUSE_PTT_UP, false);
+    }
+}
+
 /* Keyboard menus don't repurpose Space/GO as Select. Navigation wakes the
  * screen without accidentally changing a setting; Enter can confirm pairing. */
 static void keyboard_buttons(unsigned ev)

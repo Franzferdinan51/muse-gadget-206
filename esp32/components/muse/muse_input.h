@@ -38,6 +38,11 @@ typedef enum {
     MUSE_PTT_UP,
 } muse_ptt_t;
 
+/* On-screen push-to-talk for touch boards (the face's mic hit-area):
+ * posts the same PTT events as the physical talk button, minus the
+ * pairing-confirm branch, which stays physical-only. */
+void muse_input_screen_talk(bool down);
+
 typedef struct {
     muse_ptt_t type;
     bool wake;   /* a press that woke the screen: a tap only wakes */

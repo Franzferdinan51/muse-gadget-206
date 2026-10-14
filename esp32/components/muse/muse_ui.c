@@ -15,6 +15,7 @@
  */
 
 #include "muse_ui.h"
+#include "muse_input.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -426,6 +427,11 @@ static void set_mic_color(uint32_t color)
     }
 }
 
+static void on_ptt_hit(lv_event_t *e)
+{
+    muse_input_screen_talk(lv_event_get_code(e) == LV_EVENT_PRESSED);
+}
+
 /* Icons beside the physical buttons, in place of an instruction caption. */
 static void build_button_icons(lv_obj_t *face)
 {
@@ -433,6 +439,21 @@ static void build_button_icons(lv_obj_t *face)
     s_mic_icon = make_mic(face, s_tall ? 24 : s_small ? 12 : 26);
     lv_obj_align(s_mic_icon, t->align, t->x, t->y);
     set_mic_color(COLOR_DIM);
+
+    /* Hold-to-talk on the mic (touch boards): a generous invisible hit
+     * area over the icon; hold posts PTT down, release posts up. The
+     * physical button keeps working exactly as before. */
+    if (muse_board->touch) {
+        lv_obj_t *hit = lv_obj_create(face);
+        lv_obj_remove_style_all(hit);
+        lv_obj_set_size(hit, 88, 88);
+        lv_obj_align_to(hit, s_mic_icon, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_PRESS_LOST, NULL);
+    }
 
     /* Without touch the aux button opens the menu rather than sleeping. A board
      * that leaves aux_hint out has no button to put an icon beside. */
