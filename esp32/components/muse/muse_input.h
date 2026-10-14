@@ -57,3 +57,5 @@ void muse_input_post_ptt(bool down);
 
 /* Plays the goodbye animation and powers off (from the input task). */
 void muse_input_request_power_off(void);
+/* Shows RESTARTING and reboots (from the input task, so the caption paints). */
+void muse_input_request_reboot(void);

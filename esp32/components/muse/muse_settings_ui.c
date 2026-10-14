@@ -1309,12 +1309,21 @@ static void on_power_off(lv_event_t *e)
     muse_input_request_power_off();
 }
 
+static void on_reboot(lv_event_t *e)
+{
+    (void)e;
+    show(s_home);
+    muse_ui_show_face();
+    muse_input_request_reboot();
+}
+
 static void build_power_page(lv_obj_t *tile)
 {
     lv_obj_t *list;
     s_power = page(tile, "POWER", true, &list);
     note(list, "Power Muse off completely?");
     button(list, LV_SYMBOL_POWER "  Power off", COLOR_DANGER, on_power_off, NULL);
+    button(list, LV_SYMBOL_REFRESH "  Reboot", MUSE_BLUE, on_reboot, NULL);
     button(list, "Cancel", COLOR_TEXT, on_back, NULL);
     char text[128];
     snprintf(text, sizeof(text), "Press the %s button to turn it back on. To just turn the screen off, press the %s button.",

@@ -25,6 +25,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 #if CONFIG_PM_ENABLE
@@ -73,6 +74,7 @@ static TaskHandle_t s_input;
 static bool s_talk_down;
 static bool s_cpu_low;      /* display stopped and the CPU allowed to sleep */
 static volatile bool s_power_off_requested;
+static volatile bool s_reboot_requested;
 static volatile bool s_nap_now;   /* ">nap": asleep, as if on battery, nap without waiting WIFI_NAP_MS */
 
 static void post(muse_ptt_t type, bool wake)
@@ -95,8 +97,28 @@ static void power_off(void)
     muse_state_set_caption("GOODBYE!");
     vTaskDelay(pdMS_TO_TICKS(GOODBYE_MS));
     esp_err_t err = muse_board->power_off();
-    /* Only reached if the board couldn't power off. */
+    /* Only reached if the board couldn't power off. On USB that is
+     * expected: the charger re-powers the PMU, so going dark and
+     * waiting for the unplug is the honest off. On battery it is a
+     * real failure. */
     vTaskDelay(pdMS_TO_TICKS(500));
+    muse_power_t p = { .battery_pct = -1 };
+    bool usb = muse_board->read_power && muse_board->read_power(&p) == ESP_OK && p.usb;
+    if (usb) {
+        ESP_LOGI(TAG, "still alive on USB power; dark until unplugged");
+        muse_state_set_caption("UNPLUG USB TO STAY OFF");
+        vTaskDelay(pdMS_TO_TICKS(2500));   /* let the reason register */
+        if (muse_board->display_pause) {
+            muse_board->display_pause(true);
+        }
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            if (muse_board->read_power && muse_board->read_power(&p) == ESP_OK && !p.usb) {
+                muse_board->power_off();   /* sticks now; halt if it somehow doesn't */
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+        }
+    }
     ESP_LOGE(TAG, "power-off failed (%s)", esp_err_to_name(err));
     muse_state_set_mode(MUSE_MODE_IDLE);
     muse_state_set_caption("COULDN'T POWER OFF");
@@ -489,6 +511,13 @@ static void input_task(void *arg)
             s_power_off_requested = false;
             power_off();
         }
+        if (s_reboot_requested) {
+            s_reboot_requested = false;
+            ESP_LOGI(TAG, "rebooting");
+            muse_state_set_caption("RESTARTING...");
+            vTaskDelay(pdMS_TO_TICKS(600));   /* let the caption paint */
+            esp_restart();
+        }
 
         TickType_t now = xTaskGetTickCount();
         if (now - checked >= pdMS_TO_TICKS(SLEEP_CHECK_MS)) {
@@ -800,4 +829,9 @@ esp_err_t muse_input_start(QueueHandle_t queue)
 void muse_input_request_power_off(void)
 {
     s_power_off_requested = true;
+}
+
+void muse_input_request_reboot(void)
+{
+    s_reboot_requested = true;
 }

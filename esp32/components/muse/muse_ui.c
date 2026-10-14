@@ -40,6 +40,7 @@
 #include "muse_mdb.h"
 #include "muse_mem.h"
 #include "muse_menu.h"
+#include "muse_pill.h"
 #include "muse_pixel.h"
 #include "muse_settings.h"
 #include "muse_settings_ui.h"
@@ -101,6 +102,8 @@ static lv_obj_t *s_settings;
 static lv_obj_t *s_dots[2];
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
+static lv_obj_t *s_link_dot;    /* the connection pill's 10px dot (muse_pill.h) */
+static int s_link_pill = -1;    /* last pill painted, so the tick only recolors on change */
 static lv_obj_t *s_cover;
 static lv_obj_t *s_pair;
 static lv_obj_t *s_pair_code;
@@ -960,6 +963,13 @@ static void build_screen(void)
     lv_obj_align(status, LV_ALIGN_TOP_MID, 0, s_small ? 1 : 20 + s_dy);
     s_wifi_icon = make_label(status, MUSE_FONT_14, COLOR_DIM);
     s_ble_icon = make_label(status, MUSE_FONT_14, COLOR_DIM);
+    s_link_dot = lv_obj_create(status);
+    lv_obj_remove_style_all(s_link_dot);
+    lv_obj_remove_flag(s_link_dot, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(s_link_dot, 10, 10);
+    lv_obj_set_style_radius(s_link_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_link_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_link_dot, lv_color_hex(MUSE_PILL_DOT_UNPAIRED), 0);
     s_power_lbl = make_label(status, MUSE_FONT_LABEL, COLOR_DIM);
 
     /* The compact layout leaves the state to the avatar and the caption,
@@ -1426,6 +1436,11 @@ static void update_chrome(float now)
     muse_hatch_status_t h;
     muse_hatch_status(&h);
     bool paired = h.state != MUSE_HATCH_NOT_SET;
+    muse_pill_t pill = muse_pill_from_link(h.state, paired || muse_link_hatch_linked());
+    if ((int)pill != s_link_pill) {
+        lv_obj_set_style_bg_color(s_link_dot, lv_color_hex(muse_pill_dot(pill)), 0);
+        s_link_pill = (int)pill;
+    }
 
     /* The gadget's name, until it's paired. Emptied rather than hidden: the
      * read layout unhides it on the way out. A narrow screen gets the hex tail

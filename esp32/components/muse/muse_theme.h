@@ -59,6 +59,7 @@
 #define MUSE_DIM 0x8B84A8        /* secondary text, inactive icons */
 #define MUSE_FAINT 0x3A3358      /* tertiary text, off segments */
 #define MUSE_OK 0x6FF0BF         /* success / connected */
+#define MUSE_AMBER 0xFFC107       /* connecting: the app's Colors.amber, for the link dot */
 #define MUSE_WARN 0xFFB45C       /* warning */
 #define MUSE_DANGER 0xFF5C5C     /* error / destructive */
 #define MUSE_MIST 0xF4F8FF       /* text on filled blue bubbles */

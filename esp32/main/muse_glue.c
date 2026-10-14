@@ -973,7 +973,9 @@ bool muse_mdb_sd_status(bool *present, unsigned *total_mb,
     *present = muse_sd_info(&total, &freeb);
     *total_mb = (unsigned)(total >> 20);
     *free_mb = (unsigned)(freeb >> 20);
-    *key_on_sd = muse_sd_tts_key() != NULL;
+    /* No lazy mount here: a mount attempt's log lines would interleave
+     * into this JSON response. The TTS path mounts on demand. */
+    *key_on_sd = muse_sd_mounted() && muse_sd_tts_key() != NULL;
     return true;
 }
 

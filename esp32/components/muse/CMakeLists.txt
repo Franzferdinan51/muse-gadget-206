@@ -31,6 +31,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_ui.c"
         "muse_boot_logo.c"
         "muse_status.c"
+        "muse_pill.c"
         "muse_audio.c"
         "muse_pmu.c"
         "muse_input.c"
@@ -52,6 +53,12 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND srcs "muse_chat_link.c")   # text replies over Link's session
     endif()
     list(APPEND srcs "muse_chat_text.c")
+    # Juno per-pose face loops (converted from the CompanionApp's MP4
+    # clips; the S3 can't decode video, so GIF it is). 206 only: ~1MB
+    # the other boards must not pay for.
+    if(CONFIG_MUSE_BOARD_WAVESHARE_S3_206)
+        list(APPEND embed "juno/juno_idle.gif" "juno/juno_orb.gif" "juno/juno_talking.gif" "juno/juno_typing.gif")
+    endif()
     # Baked Montserrat (tools/muse/gen_fonts.sh): the UI's only text fonts.
     list(APPEND srcs
         "fonts/muse_font_12.c" "fonts/muse_font_14.c" "fonts/muse_font_16.c"

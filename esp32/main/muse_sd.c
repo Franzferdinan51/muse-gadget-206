@@ -73,20 +73,19 @@ esp_err_t muse_sd_mount(void)
         .max_files = 4,
         .allocation_unit_size = 0,
     };
-    esp_err_t err = ESP_FAIL;
-    for (int s = 0; s < 2 && err != ESP_OK; s++) {
-        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-        host.slot = s == 0 ? SDMMC_HOST_SLOT_0 : SDMMC_HOST_SLOT_1;
-        host.max_freq_khz = SDMMC_FREQ_DEFAULT;
-        sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-        slot.clk = (gpio_num_t)SD_PIN_CLK;
-        slot.cmd = (gpio_num_t)SD_PIN_CMD;
-        slot.d0 = (gpio_num_t)SD_PIN_D0;
-        slot.width = 1;
-        slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-        err = esp_vfs_fat_sdmmc_mount(MUSE_SD_MOUNT_POINT, &host, &slot,
-                                      &mnt, &s_card);
-    }
+    /* Slot 1 only: the S3 has no SDMMC slot 0, so probing it first just
+     * wastes a failure's worth of time and log lines on every attempt. */
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = SDMMC_HOST_SLOT_1;
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.clk = (gpio_num_t)SD_PIN_CLK;
+    slot.cmd = (gpio_num_t)SD_PIN_CMD;
+    slot.d0 = (gpio_num_t)SD_PIN_D0;
+    slot.width = 1;
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(MUSE_SD_MOUNT_POINT, &host, &slot,
+                                            &mnt, &s_card);
     if (err == ESP_OK) {
         s_mounted = true;
         ESP_LOGI(TAG, "card mounted at %s", MUSE_SD_MOUNT_POINT);
