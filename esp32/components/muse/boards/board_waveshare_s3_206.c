@@ -395,20 +395,21 @@ static void panel_sleep_direct(bool sleep)
         vTaskDelay(pdMS_TO_TICKS(120));
         return;
     }
-    /* Wake: bare SLPOUT is NOT enough on this CO5300 - the frame came
-     * back vertically broken with the panel's lower half black (owner
-     * photo, 2026-10-13) because the boot init's page-2 trims, QSPI
-     * mode and address windows do not survive SLPIN. Replay the whole
-     * boot init table; cold boots prove it lands perfectly. */
-    for (size_t i = 0; i < sizeof(s_lcd_init) / sizeof(s_lcd_init[0]); i++) {
-        const co5300_lcd_init_cmd_t *c = &s_lcd_init[i];
-        esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | ((unsigned)c->cmd << 8),
-                                  c->data_bytes ? (void *)c->data : NULL,
-                                  c->data_bytes);
-        if (c->delay_ms) {
-            vTaskDelay(pdMS_TO_TICKS(c->delay_ms));
-        }
-    }
+    /* Wake: bare SLPOUT is NOT enough on this CO5300, and neither was
+     * the flash12 hand-rolled replay of the vendor table over raw
+     * tx_param - the glass came back rotated 90 degrees and boxed
+     * (owner photo, 2026-10-13 22:37). The replay skipped the two
+     * things boot does that the table alone does not: the hardware
+     * reset, and the driver's MADCTL/COLMOD pre-write ahead of the
+     * table (panel_co5300_init). Registers the flush path never
+     * rewrites keep whatever the sleep cycle left in them. Run the
+     * panel's own boot sequence verbatim instead: reset -> init ->
+     * gap -> display on. Cold boots land perfectly; make a wake
+     * indistinguishable from one. */
+    esp_lcd_panel_reset(s_panel);
+    esp_lcd_panel_init(s_panel);
+    esp_lcd_panel_set_gap(s_panel, 22, 0);
+    esp_lcd_panel_disp_on_off(s_panel, true);
 }
 
 /* Panel control must not interleave with pixel DMA: a command that

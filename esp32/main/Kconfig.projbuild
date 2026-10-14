@@ -69,6 +69,17 @@ menu "ESP32 Device SDK"
             Each refresh is one call to the endpoint that can mint unusable
             tokens after an idle period, so keep this long. Set 0 to disable.
 
+    config MUSEOS_OTA_MANIFEST_URL
+        string "MuseOS OTA auto-update manifest URL"
+        default ""
+        help
+            When set (and OTA is enabled), the device periodically fetches
+            this JSON manifest ({"version": "...", "url": "..."}) and
+            installs a newer firmware image by itself - no host trigger,
+            no paired phone. Each advertised version is attempted at most
+            once (recorded in NVS first), so a build that cannot stay up
+            can never loop the device. Empty disables auto-update.
+
     config HOMEHUB_OTA_ENABLED
         bool "Enable OTA firmware updates"
         default n

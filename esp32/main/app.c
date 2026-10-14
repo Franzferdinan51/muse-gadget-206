@@ -116,6 +116,9 @@ static const char *HEARTBEAT_TAG = "link.heartbeat";
 // The control WS is the recovery channel — if a new image can't reach it,
 // no future device.ota could repair the device, so rolling back is correct.
 #define OTA_VERIFY_TIMEOUT_US (300LL * 1000000LL)
+// MuseOS local validation window: an image up this long with Wi-Fi
+// connected counts as healthy even when no control WS ever comes up.
+#define OTA_VERIFY_LOCAL_HEALTH_US (120LL * 1000000LL)
 
 // Static IPs for the raw L3 tunnel. ESP side hosts .1; VM side .2.
 #define TUNNEL_IP_ESP   "10.42.0.1"
@@ -2548,6 +2551,25 @@ static void ota_verify_task(void *arg) {
         if (noise_ctrl_is_connected()) {
             if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
                 ESP_LOGI(TAG, "OTA image validated (control WS up)");
+            } else {
+                ESP_LOGE(TAG, "esp_ota_mark_app_valid_cancel_rollback failed");
+            }
+            stack_monitor_record(NULL);
+            vTaskDelete(NULL);
+            return;
+        }
+        // MuseOS local policy: an image that is up, on Wi-Fi and stable
+        // for OTA_VERIFY_LOCAL_HEALTH_US is healthy even with no Muse
+        // account paired. Upstream gates validation on the control WS
+        // because that is its remote recovery channel; on this device
+        // MDB/USB is the recovery channel, and without a local gate no
+        // wireless update could ever stick on an unpaired watch. A
+        // crash-looping image reboots before this window, so the
+        // anti-brick intent holds.
+        if (esp_timer_get_time() > OTA_VERIFY_LOCAL_HEALTH_US
+            && wifi_mgr_is_connected()) {
+            if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+                ESP_LOGI(TAG, "OTA image validated (local health: wifi up, stable)");
             } else {
                 ESP_LOGE(TAG, "esp_ota_mark_app_valid_cancel_rollback failed");
             }

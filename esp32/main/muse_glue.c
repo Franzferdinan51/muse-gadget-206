@@ -19,10 +19,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "cJSON.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
@@ -616,6 +621,154 @@ static void boot_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+
+// ---- OTA auto-update (MuseOS) ------------------------------------------
+// The watch checks a small JSON manifest on a schedule and installs a
+// newer image by itself: no USB trigger, no paired phone. Discipline:
+// each advertised version is attempted at most once, ever - the attempt
+// is written to NVS *before* the download starts, so if the new image
+// cannot validate and rolls back, this build never chases it again.
+// (Upstream's rollback is the safety net; the once-per-version record
+// is what keeps the net from becoming a reboot loop.)
+
+bool muse_mdb_ota_start(const char *url, bool force);
+
+#define OTA_AUTO_NVS_NS    "ota_auto"
+#define OTA_AUTO_NVS_KEY   "tried"
+#define OTA_AUTO_FIRST_MS  (45 * 1000)
+#define OTA_AUTO_PERIOD_MS (6LL * 60 * 60 * 1000)
+#define OTA_AUTO_BUF       2048
+
+static void ota_auto_parse_ver(const char *s, long out[3])
+{
+    out[0] = out[1] = out[2] = 0;
+    if (!s) return;
+    if (*s == 'v' || *s == 'V') s++;
+    for (int i = 0; i < 3 && *s; i++) {
+        char *end;
+        out[i] = strtol(s, &end, 10);
+        if (end == s) break;
+        s = end;
+        if (*s == '.') s++; else break;
+    }
+}
+
+// Same rule as ota.c's version_is_newer: numeric semver wins; equal
+// numbers with a differing string count as newer; identical is not.
+static bool ota_auto_ver_newer(const char *cand, const char *cur)
+{
+    long a[3], b[3];
+    ota_auto_parse_ver(cand, a);
+    ota_auto_parse_ver(cur, b);
+    for (int i = 0; i < 3; i++) {
+        if (a[i] != b[i]) return a[i] > b[i];
+    }
+    return cand && cur && strcmp(cand, cur) != 0;
+}
+
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t len;
+} ota_auto_sink_t;
+
+static esp_err_t ota_auto_http_evt(esp_http_client_event_t *evt)
+{
+    ota_auto_sink_t *sink = (ota_auto_sink_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && sink && evt->data_len > 0) {
+        size_t room = sink->cap - 1 - sink->len;
+        size_t take = (size_t)evt->data_len < room ? (size_t)evt->data_len : room;
+        memcpy(sink->buf + sink->len, evt->data, take);
+        sink->len += take;
+        sink->buf[sink->len] = '\0';
+    }
+    return ESP_OK;
+}
+
+static void ota_auto_check_once(void)
+{
+    if (!wifi_mgr_is_connected()) {
+        ESP_LOGI(TAG, "ota auto: wifi down, skipping check");
+        return;
+    }
+    char *buf = (char *)malloc(OTA_AUTO_BUF);
+    if (!buf) return;
+    ota_auto_sink_t sink = { .buf = buf, .cap = OTA_AUTO_BUF, .len = 0 };
+    buf[0] = '\0';
+    esp_http_client_config_t cfg = {
+        .url = CONFIG_MUSEOS_OTA_MANIFEST_URL,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+        .event_handler = ota_auto_http_evt,
+        .user_data = &sink,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) { free(buf); return; }
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGW(TAG, "ota auto: manifest fetch failed (%s, http %d)",
+                 esp_err_to_name(err), status);
+        free(buf);
+        return;
+    }
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) {
+        ESP_LOGW(TAG, "ota auto: manifest is not JSON");
+        return;
+    }
+    const cJSON *jv = cJSON_GetObjectItemCaseSensitive(root, "version");
+    const cJSON *ju = cJSON_GetObjectItemCaseSensitive(root, "url");
+    if (!cJSON_IsString(jv) || !cJSON_IsString(ju)
+        || !jv->valuestring[0] || !ju->valuestring[0]) {
+        ESP_LOGW(TAG, "ota auto: manifest missing version/url");
+        cJSON_Delete(root);
+        return;
+    }
+    char version[64];
+    char url[256];
+    strlcpy(version, jv->valuestring, sizeof(version));
+    strlcpy(url, ju->valuestring, sizeof(url));
+    cJSON_Delete(root);
+
+    const char *running = esp_app_get_description()->version;
+    if (!ota_auto_ver_newer(version, running)) {
+        ESP_LOGI(TAG, "ota auto: %s is the latest (running %s)", version, running);
+        return;
+    }
+    nvs_handle_t nv;
+    if (nvs_open(OTA_AUTO_NVS_NS, NVS_READWRITE, &nv) == ESP_OK) {
+        char tried[64] = "";
+        size_t n = sizeof(tried);
+        nvs_get_str(nv, OTA_AUTO_NVS_KEY, tried, &n);
+        if (strcmp(tried, version) == 0) {
+            ESP_LOGW(TAG, "ota auto: %s already attempted once; not retrying", version);
+            nvs_close(nv);
+            return;
+        }
+        // Record the attempt BEFORE downloading: if this image rolls
+        // back, the restored build reads the same record.
+        nvs_set_str(nv, OTA_AUTO_NVS_KEY, version);
+        nvs_commit(nv);
+        nvs_close(nv);
+    }
+    ESP_LOGI(TAG, "ota auto: updating %s -> %s", running, version);
+    muse_mdb_ota_start(url, false);
+}
+
+static void ota_auto_task(void *arg)
+{
+    (void)arg;
+    xEventGroupWaitBits(s_ready, BIT_LINK, pdFALSE, pdTRUE, portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(OTA_AUTO_FIRST_MS));
+    for (;;) {
+        ota_auto_check_once();
+        vTaskDelay(pdMS_TO_TICKS(OTA_AUTO_PERIOD_MS));
+    }
+}
+
 void muse_glue_start(void) {
     s_ready = xEventGroupCreate();
     muse_link_register(&s_ops);
@@ -632,6 +785,12 @@ void muse_glue_start(void) {
         || xTaskCreate(keeper_task, "muse_keep", 6144, NULL, 4, &s_keeper) != pdPASS) {
         ESP_LOGE(TAG, "failed to start Muse tasks");
     }
+#if CONFIG_HOMEHUB_OTA_ENABLED
+    if (CONFIG_MUSEOS_OTA_MANIFEST_URL[0]
+        && xTaskCreate(ota_auto_task, "ota_auto", 8192, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "ota auto: task start failed");
+    }
+#endif
 }
 
 void muse_glue_storage_ready(void) {

@@ -1130,6 +1130,8 @@ static void build_overlays(void)
 
 static volatile int s_pending_brightness = -1;
 static volatile int s_pending_panel_sleep = -1;  /* -1 none, 0 wake, 1 sleep */
+static volatile bool s_wake_applied;  /* input task: panel wake sequence done */
+static bool s_wake_pending;           /* frame loop: wake requested, still dark */
 
 static void apply_brightness(int pct)
 {
@@ -1182,6 +1184,9 @@ void muse_ui_apply_pending_brightness(void)
             s_pending_brightness = -1;
             muse_board->set_brightness(pb);
         }
+        /* panel_sleep() runs synchronously on the send task, so the
+         * panel is fully awake here: the frame loop may repaint now. */
+        s_wake_applied = true;
     } else if (pb >= 0) {
         s_pending_brightness = -1;
         muse_board->set_brightness(pb);
@@ -1198,6 +1203,31 @@ bool muse_ui_dark(void)
 static bool update_sleep(void)
 {
     bool asleep = muse_state_asleep();
+    if (s_wake_pending) {
+        if (s_wake_applied) {
+            s_wake_pending = false;
+            s_wake_applied = false;
+            s_dark = false;
+            /* Woken by a button: drop the cover now. Woken by touch: on release. */
+            if (lv_obj_get_style_bg_opa(s_cover, 0) == LV_OPA_COVER) {
+                lv_obj_add_flag(s_cover, LV_OBJ_FLAG_HIDDEN);
+            }
+            /* The last frame flushed before SLPIN was the black cover,
+             * and panel GRAM keeps showing it: LVGL would only repaint
+             * areas that change, leaving black slabs around the
+             * animated face after a wake. Force one full repaint so
+             * the wake frame is complete - now that the panel is
+             * actually awake to receive it. */
+            lv_obj_invalidate(lv_screen_active());
+            if (s_tv) {
+                lv_obj_invalidate(s_tv);
+            }
+        }
+        /* Still dark until the panel finishes its wake sequence:
+         * skip rendering so nothing flushes into a sleeping or
+         * half-initialised panel. */
+        return true;
+    }
     if (asleep && !s_dark) {
         muse_menu_close();
         apply_brightness(0);
@@ -1210,21 +1240,15 @@ static bool update_sleep(void)
         lv_obj_remove_flag(s_cover, LV_OBJ_FLAG_HIDDEN);
         s_dark = true;
     } else if (!asleep && s_dark) {
-        s_dark = false;
         s_pending_panel_sleep = 0;  /* deferred, as above */
-        /* Woken by a button: drop the cover now. Woken by touch: on release. */
-        if (lv_obj_get_style_bg_opa(s_cover, 0) == LV_OPA_COVER) {
-            lv_obj_add_flag(s_cover, LV_OBJ_FLAG_HIDDEN);
-        }
-        /* The last frame flushed before SLPIN was the black cover, and
-         * panel GRAM keeps showing it: LVGL would only repaint areas
-         * that change, leaving black slabs around the animated face
-         * after a wake. Force one full repaint so the wake frame is
-         * complete. */
-        lv_obj_invalidate(lv_screen_active());
-        if (s_tv) {
-            lv_obj_invalidate(s_tv);
-        }
+        /* Stay dark until the input task confirms the panel finished
+         * its wake sequence (the s_wake_pending gate at the top of
+         * this function drops the cover and forces the full repaint
+         * there). Doing either here raced the ~1.4 s panel sequence:
+         * the repaint flushed into a half-initialised panel, its
+         * areas were marked clean, and the corrupted frame never
+         * repainted until a page switch forced a fresh redraw. */
+        s_wake_pending = true;
     }
     if (!s_dark) {
         int target = muse_settings_brightness();

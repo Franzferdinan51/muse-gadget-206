@@ -23,3 +23,4 @@ CONFIG_LV_USE_SNAPSHOT=y
 # OTA slots cap the image at 2 MB (partitions.csv); the -O2 bench image
 # was 2,166,784 B and could never be OTA'd. -Os buys ~150 KB of .text.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_MUSEOS_OTA_MANIFEST_URL="https://raw.githubusercontent.com/Franzferdinan51/muse-gadget-206/main/ota/manifest.json"
