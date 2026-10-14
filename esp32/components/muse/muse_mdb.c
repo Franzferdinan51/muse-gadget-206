@@ -15,6 +15,8 @@
  */
 
 #include "muse_mdb.h"
+#include "muse_audio.h"
+#include "muse_voice.h"
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -692,6 +694,16 @@ void muse_mdb_handle_line(const char *line)
         } else {
             out_raw("ERR busy adapter lock held >500ms\n");
         }
+    } else if (strcmp(verb, "chirp") == 0) {
+        /* Speaker test at a gentle, capped volume. */
+        char *vs = strtok_r(NULL, " \t", &save);
+        int vol = vs ? atoi(vs) : 35;
+        if (vol < 1) vol = 1;
+        if (vol > 80) vol = 80;
+        muse_settings_set_volume(vol);
+        muse_audio_set_volume(vol);
+        muse_voice_request_chirp();
+        out_fmt("OK chirp vol=%d\n", vol);
     } else if (strcmp(verb, "ota") == 0) {
         char *sub = strtok_r(NULL, " \t", &save);
         cmd_ota(sub, sub ? strtok_r(NULL, "", &save) : NULL);

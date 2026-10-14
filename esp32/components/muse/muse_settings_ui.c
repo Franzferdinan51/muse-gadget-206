@@ -1024,6 +1024,13 @@ static void on_volume(lv_event_t *e)
     }
 }
 
+static void on_test_sound(lv_event_t *e)
+{
+    (void)e;
+    muse_audio_set_volume(muse_settings_volume());
+    muse_voice_request_chirp();
+}
+
 static void on_gain(lv_event_t *e)
 {
     int db = lv_slider_get_value(s_gain_sl) * 3;
@@ -1052,6 +1059,7 @@ static void build_sound_page(lv_obj_t *tile)
     s_sound = page(tile, "SOUND", true, &list);
     s_spk_sw = switch_row(list, "Speaker", muse_settings_speaker_on(), on_speaker_sw);
     s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
+    button(list, LV_SYMBOL_VOLUME_MID "  Test sound", MUSE_BLUE, on_test_sound, NULL);
     s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
 
     lv_obj_t *meter = lv_obj_create(list);
