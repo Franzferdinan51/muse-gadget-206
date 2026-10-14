@@ -484,9 +484,26 @@ static void set_mic_color(uint32_t color)
     }
 }
 
+static bool s_ptt_hold;
+
 static void on_ptt_hit(lv_event_t *e)
 {
-    muse_input_screen_talk(lv_event_get_code(e) == LV_EVENT_PRESSED);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+        /* Freeze the page carousel for the whole hold: if the tileview
+         * claims the drag as a scroll it slides to the next page, the
+         * hit area gets PRESS_LOST, and the note is cut mid-sentence. */
+        s_ptt_hold = true;
+        if (s_tv) {
+            lv_obj_remove_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE);
+        }
+    } else if (s_ptt_hold) {
+        s_ptt_hold = false;
+        if (s_tv) {
+            lv_obj_add_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE);
+        }
+    }
+    muse_input_screen_talk(code == LV_EVENT_PRESSED);
 }
 
 static void on_repeat_hit(lv_event_t *e)
@@ -1493,7 +1510,7 @@ static void update_chrome(float now)
     if (s_tv) {
         int page = lv_tileview_get_tile_active(s_tv) == s_settings;
         bool subpage = muse_settings_ui_in_subpage();
-        bool swipe = !page || !subpage;
+        bool swipe = (!page || !subpage) && !s_ptt_hold;
         if (swipe != lv_obj_has_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE)) {
             lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, swipe);
         }

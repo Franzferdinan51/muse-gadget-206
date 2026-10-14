@@ -42,7 +42,7 @@
 
 static const char *TAG = "muse_voice";
 
-#define MAX_SECS 15
+#define MAX_SECS 30
 #define TAIL_FRAMES (MUSE_AUDIO_RATE * 12 / 100)   /* capture lag + poll interval, stops before the release click */
 #define MAX_FRAMES (MUSE_AUDIO_RATE * MAX_SECS)
 #define MIN_HELD_MS 220   /* the companion's hold-to-talk arm delay: shorter presses are taps, not speech */
