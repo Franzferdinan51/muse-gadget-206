@@ -1043,8 +1043,8 @@ static void set_val(lv_obj_t *l, const char *fmt, int v);
 static lv_obj_t *s_avatar_val;
 static const char *avatar_name(int which)
 {
-    return which == MUSE_AVATAR_PIXEL_GIF ? "Pixel Juno (animated)"
-           : which == MUSE_AVATAR_PIXEL ? "Pixel Juno"
+    return which == MUSE_AVATAR_PIXEL_GIF ? "Pixel Juno"
+           : which == MUSE_AVATAR_PIXEL ? "Pixel Muse"
            : which == MUSE_AVATAR_JOLLY ? "Jolly"
            : which == MUSE_AVATAR_INK ? "Hermes ink"
            : which == MUSE_AVATAR_KNIGHT ? "Hermes knight"
