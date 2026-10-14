@@ -41,11 +41,15 @@ static struct {
     bool ble_on;
     uint8_t avatar;
     uint8_t power_mode;
+    uint8_t tts_model;
+    uint8_t tts_voice_mode;
     char ssid[MUSE_SSID_MAX + 1];
     char pass[MUSE_PASS_MAX + 1];
     char host[MUSE_HOST_MAX + 1];
     char vm[MUSE_VM_MAX + 1];
     char token[MUSE_TOKEN_MAX + 1];
+    char tts_voice[MUSE_TTS_VOICE_MAX + 1];
+    char tts_local[MUSE_TTS_LOCAL_MAX + 1];
 } s = {
     .volume = CONFIG_MUSE_DEFAULT_VOLUME,
     .speaker_on = true,
@@ -55,6 +59,8 @@ static struct {
     .wifi_on = true,
     .avatar = MUSE_AVATAR_GIF,
     .power_mode = MUSE_POWER_AUTO,
+    .tts_model = MUSE_TTS_MODEL_FREE,
+    .tts_local = "http://192.168.1.96:8799",
     .host = DEFAULT_HOST,
 };
 
@@ -128,6 +134,12 @@ esp_err_t muse_settings_init(void)
     if (s.avatar > MUSE_AVATAR_STUDIO) { s.avatar = MUSE_AVATAR_GIF; }
     load_u8("power_mode", &s.power_mode);
     if (s.power_mode > MUSE_POWER_OFF) { s.power_mode = MUSE_POWER_AUTO; }
+    load_u8("tts_model", &s.tts_model);
+    if (s.tts_model > MUSE_TTS_MODEL_QWEN3) { s.tts_model = MUSE_TTS_MODEL_FREE; }
+    load_u8("tts_vmode", &s.tts_voice_mode);
+    if (s.tts_voice_mode >= muse_settings_tts_voice_count()) { s.tts_voice_mode = MUSE_TTS_VOICE_DEFAULT; }
+    load_str("tts_voice", s.tts_voice, sizeof(s.tts_voice));
+    load_str("tts_local", s.tts_local, sizeof(s.tts_local));
     nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
     if (nvs_get_u8(s_nvs, "wifi_on", &b) == ESP_OK) {
         s.wifi_on = b;
@@ -162,6 +174,55 @@ int muse_settings_mic_gain(void) { int v; LOCKED(v = s.mic_gain); return v; }
 int muse_settings_brightness(void) { int v; LOCKED(v = s.brightness); return v; }
 int muse_settings_avatar(void) { int v; LOCKED(v = s.avatar); return v; }
 int muse_settings_power_mode(void) { int v; LOCKED(v = s.power_mode); return v; }
+int muse_settings_tts_model(void) { int v; LOCKED(v = s.tts_model); return v; }
+int muse_settings_tts_voice_mode(void) { int v; LOCKED(v = s.tts_voice_mode); return v; }
+
+void muse_settings_tts_voice_id(char out[MUSE_TTS_VOICE_MAX + 1])
+{
+    LOCKED(strlcpy(out, s.tts_voice, MUSE_TTS_VOICE_MAX + 1));
+}
+
+void muse_settings_tts_local_url(char out[MUSE_TTS_LOCAL_MAX + 1])
+{
+    LOCKED(strlcpy(out, s.tts_local, MUSE_TTS_LOCAL_MAX + 1));
+}
+
+void muse_settings_set_tts_local_url(const char *url)
+{
+    if (!url) { url = ""; }
+    LOCKED(strlcpy(s.tts_local, url, sizeof(s.tts_local)));
+    save_str("tts_local", url);
+    notify(MUSE_SETTING_TTS_MODEL);
+}
+
+/* Built-in Fish Audio voices (public catalog reference ids). */
+static const muse_tts_voice_t kTtsVoices[] = {
+    { "Default", "" },
+    { "Sarah", "933563129e564b19a115bedd57b7406a" },
+    { "Selene", "b347db033a6549378b48d00acb0d06cd" },
+    { "Hannah", "9a9cf47702da476aa4629e2506d4a857" },
+    { "Friendly", "b545c585f631496c914815291da4e893" },
+    { "Polo", "f48d143a59a946ab87c0130fd081f349" },
+    { "Adrian", "bf322df2096a46f18c579d0baa36f41d" },
+    { "Ethan", "536d3a5e000945adb7038665781a4aca" },
+    { "Elite", "d8a1340984ee4b63ad1ffae27a6a4339" },
+    { "Jordan", "79d0bd3e4e5444b18f7b6d89b5927bf1" },
+    { "Energetic", "802e3bc2b27e49c2995d23ef70e6ac89" },
+    { "Atomic", "4c6a6762e4ac4bdebdb4fa8525d054a2" },
+    { "Announcer", "90e65eaaf50e4470b8e6d43ee6afd7d5" },
+    { "Custom", "" },
+};
+
+int muse_settings_tts_voice_count(void)
+{
+    return (int)(sizeof(kTtsVoices) / sizeof(kTtsVoices[0]));
+}
+
+const muse_tts_voice_t *muse_settings_tts_voice_at(int idx)
+{
+    if (idx < 0 || idx >= muse_settings_tts_voice_count()) { return &kTtsVoices[0]; }
+    return &kTtsVoices[idx];
+}
 int muse_settings_sleep_s(void) { int v; LOCKED(v = s.sleep_s); return v; }
 bool muse_settings_wifi_on(void) { bool v; LOCKED(v = s.wifi_on); return v; }
 bool muse_settings_ble_on(void) { bool v; LOCKED(v = s.ble_on); return v; }
@@ -247,6 +308,31 @@ void muse_settings_set_power_mode(int mode)
     LOCKED(s.power_mode = (uint8_t)v);
     save_u8("power_mode", (uint8_t)v);
     notify(MUSE_SETTING_POWER);
+}
+
+void muse_settings_set_tts_model(int which)
+{
+    int v = clampi(which, MUSE_TTS_MODEL_FREE, MUSE_TTS_MODEL_QWEN3);
+    LOCKED(s.tts_model = (uint8_t)v);
+    save_u8("tts_model", (uint8_t)v);
+    notify(MUSE_SETTING_TTS_MODEL);
+}
+
+void muse_settings_set_tts_voice_mode(int mode)
+{
+    int v = clampi(mode, MUSE_TTS_VOICE_DEFAULT, muse_settings_tts_voice_count() - 1);
+    LOCKED(s.tts_voice_mode = (uint8_t)v);
+    save_u8("tts_vmode", (uint8_t)v);
+    notify(MUSE_SETTING_TTS_VOICE);
+}
+
+void muse_settings_set_tts_voice_id(const char *id)
+{
+    char buf[MUSE_TTS_VOICE_MAX + 1];
+    LOCKED(strlcpy(s.tts_voice, id ? id : "", sizeof(s.tts_voice)));
+    LOCKED(strlcpy(buf, s.tts_voice, sizeof(buf)));
+    save_str("tts_voice", buf);
+    notify(MUSE_SETTING_TTS_VOICE);
 }
 
 void muse_settings_set_sleep_s(int secs)
