@@ -54,6 +54,13 @@ esp_err_t muse_audio_write(const int16_t *mono, size_t frames);
 /* Self-tests: plays even when the speaker setting is off. */
 esp_err_t muse_audio_write_unmuted(const int16_t *mono, size_t frames);
 
+/* Output-stage gate: DAC mute + amp off (via the codec's PA pin). The
+ * output starts muted; muse_audio_write opens the gate automatically on
+ * the first chunk carrying real signal, so the speaker stays dead silent
+ * while thinking/idle and during silence-paced (text-only) replies.
+ * Callers close it when speech ends (muse_voice speak_end, bench tests). */
+void muse_audio_output_mute(bool mute);
+
 /* RMS of a buffer in dBFS (-100 for silence). */
 float muse_audio_dbfs(const int16_t *mono, size_t frames);
 

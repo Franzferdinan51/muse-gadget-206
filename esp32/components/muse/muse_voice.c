@@ -356,6 +356,10 @@ static void speak_end(uint32_t gen)
     if (muse_speak_is_latest(&s_speak_slot, gen)) {
         s_speaking = false;
     }
+    /* Speech is over, however it ended: close the output gate (DAC mute +
+     * amp off) so nothing after the reply can buzz or loop audibly. It
+     * reopens on the first real signal chunk of the next reply. */
+    muse_audio_output_mute(true);
 }
 
 /*
@@ -366,6 +370,7 @@ static bool hatch_reply(bool *delivered)
 {
     muse_state_set_mode(MUSE_MODE_THINKING);
     muse_state_set_caption("SENDING VOICE NOTE");   /* until there's a transcript or reply */
+    muse_audio_output_mute(true);   /* thinking is silent: output stage off until real speech */
     static int16_t buf[MUSE_AUDIO_CHUNK];
     static const int16_t silence[MUSE_AUDIO_CHUNK];
     char text[96];
@@ -941,22 +946,28 @@ static void voice_task(void *arg)
             }
             if (s_chirp) {
                 s_chirp = false;
+                muse_audio_output_mute(false);
                 muse_audio_chirp(1);
+                muse_audio_output_mute(true);
                 pre_reset();
             }
             if (s_mp3test) {
                 s_mp3test = false;
                 int16_t *pcm = NULL;
                 size_t n = muse_hatch_mp3_selftest(&pcm);
+                muse_audio_output_mute(false);
                 for (size_t i = 0; i < n; i += MUSE_AUDIO_CHUNK) {
                     muse_audio_write_unmuted(pcm + i, n - i < MUSE_AUDIO_CHUNK ? n - i : MUSE_AUDIO_CHUNK);
                 }
+                muse_audio_output_mute(true);
                 free(pcm);
                 pre_reset();
             }
             if (s_loopback) {
                 s_loopback = false;
+                muse_audio_output_mute(false);
                 muse_audio_loopback_test(muse_settings_volume());
+                muse_audio_output_mute(true);
                 pre_reset();
             }
             if (s_stop) {

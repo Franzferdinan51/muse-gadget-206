@@ -38,6 +38,7 @@ static const char *TAG = "muse_audio";
 static esp_codec_dev_handle_t s_spk;
 static esp_codec_dev_handle_t s_mic;
 static bool s_open;
+static bool s_out_muted = true;   /* output stage starts silent; see muse_audio_output_mute */
 static bool s_board_ok;
 static int16_t s_in_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
 static int16_t s_out_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
@@ -61,6 +62,7 @@ static esp_err_t open_codecs(void)
         return ESP_FAIL;
     }
     s_open = true;
+    esp_codec_dev_set_out_mute(s_spk, s_out_muted);
     return ESP_OK;
 }
 
@@ -116,6 +118,16 @@ void muse_audio_set_volume(int volume)
 {
     if (s_spk) {
         esp_codec_dev_set_out_vol(s_spk, volume);
+    }
+}
+
+void muse_audio_output_mute(bool mute)
+{
+    if (!s_spk || !s_open || mute == s_out_muted) {
+        return;
+    }
+    if (esp_codec_dev_set_out_mute(s_spk, mute) == ESP_CODEC_DEV_OK) {
+        s_out_muted = mute;
     }
 }
 
@@ -287,6 +299,19 @@ static esp_err_t audio_write_inner(const int16_t *mono, size_t frames, bool mute
 {
     if (!s_spk || !s_open) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_out_muted && !mute) {
+        /* Open the output gate on the first chunk with real signal in it.
+         * Pure-silence chunks (thinking filler, silence-paced text replies)
+         * never open it, so a fed-but-silent output stage can't buzz --
+         * the runaway "laser" Duckets hears around replies. The small
+         * threshold rides over decoder dither on near-silent frames. */
+        for (size_t i = 0; i < frames; i++) {
+            if (mono[i] > 8 || mono[i] < -8) {
+                muse_audio_output_mute(false);
+                break;
+            }
+        }
     }
     while (frames) {
         size_t n = frames > MUSE_AUDIO_CHUNK ? MUSE_AUDIO_CHUNK : frames;
