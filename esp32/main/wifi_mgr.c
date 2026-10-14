@@ -23,6 +23,7 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "esp_log.h"
 #include "soc/soc_caps.h"
 #include "freertos/FreeRTOS.h"
@@ -191,6 +192,15 @@ static void event_handler(void *arg, esp_event_base_t base,
         s_keep_connected = true;
         s_reconnect_backoff_ms = RECONNECT_BACKOFF_MIN_MS;  // reset on success
         xEventGroupSetBits(s_events, BIT_CONNECTED | BIT_GOT_IP);
+        // TLS certificate checks (TTS, OTA, account API) need a real wall
+        // clock; the RTC boots at the epoch and nothing else sets it.
+        static bool s_sntp_started = false;
+        if (!s_sntp_started) {
+            s_sntp_started = true;
+            esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            esp_netif_sntp_init(&sntp_cfg);
+            ESP_LOGI(TAG, "SNTP started");
+        }
     }
 }
 
