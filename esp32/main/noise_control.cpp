@@ -43,6 +43,7 @@ extern "C" {
 #include "ota.h"
 #if CONFIG_MUSE_ENABLED
 extern "C" {
+#include "muse_chat.h"
 #include "muse_state.h"
 #include "muse_status.h"
 }
@@ -141,6 +142,7 @@ static char s_wifi_ssid[33];
 static noise_ctrl_status_cb s_status_cb = nullptr;
 static noise_ctrl_command_cb s_command_cb = nullptr;
 static noise_ctrl_agent_name_cb s_agent_name_cb = nullptr;
+static noise_ctrl_agent_avatar_cb s_agent_avatar_cb = nullptr;
 
 static char s_vm_id[128];
 static char *s_auth_token = nullptr;
@@ -1149,6 +1151,15 @@ static void identity_finish(identity_fetch &f) {
     } else {
         ESP_LOGW(TAG, "identity reply has no name");
     }
+#if CONFIG_MUSE_ENABLED
+    if (f.body && s_agent_avatar_cb) {
+        char avatar[385];
+        if (muse_identity_avatar_url(f.body, avatar, sizeof(avatar))) {
+            ESP_LOGI(TAG, "agent avatar: %.64s%s", avatar, strlen(avatar) > 64 ? "..." : "");
+            s_agent_avatar_cb(avatar);
+        }
+    }
+#endif
     cJSON_Delete(root);
     free(f.body);
     f.body = nullptr;
@@ -2472,6 +2483,10 @@ extern "C" void noise_ctrl_init(const char *node_id, const char *display_name,
 
 extern "C" void noise_ctrl_set_agent_name_cb(noise_ctrl_agent_name_cb cb) {
     s_agent_name_cb = cb;
+}
+
+extern "C" void noise_ctrl_set_agent_avatar_cb(noise_ctrl_agent_avatar_cb cb) {
+    s_agent_avatar_cb = cb;
 }
 
 extern "C" void noise_ctrl_set_command_cb(noise_ctrl_command_cb cb) {

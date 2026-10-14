@@ -34,6 +34,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 #include "rom/tjpgd.h"
 #if CONFIG_HOMEHUB_LED_BACKEND_MUSE
 #include "muse_ui.h"
@@ -86,6 +87,9 @@ typedef struct {
     image_fetch_done_cb done;
     void *user;
     esp_http_client_handle_t http;
+    // data: URL payload, decoded up front: fetch_read serves it as the body.
+    uint8_t *mem;
+    size_t mem_len, mem_off;
     int width, height;
     // The scheme the task's stack and memory budget were sized for. Redirects
     // may not change it: TLS on the HTTP stack overflows it, and an HTTPS
@@ -159,6 +163,18 @@ static int fetch_read(fetch_t *f, uint8_t *buf, size_t len) {
     while (have < len && f->peek_len) {
         buf[have++] = f->peek[f->peek_off++];
         f->peek_len--;
+    }
+    if (f->mem) {
+        size_t left = f->mem_len - f->mem_off;
+        size_t take = len - have < left ? len - have : left;
+        memcpy(buf + have, f->mem + f->mem_off, take);
+        f->mem_off += take;
+        have += take;
+        f->bytes += take;
+        if (!take) {
+            f->eof = true;
+        }
+        return (int)have;
     }
     while (have < len && !f->eof) {
         if (internal_free() < FETCH_FLOOR_BYTES) {
@@ -401,6 +417,55 @@ static esp_err_t open_following_redirects(fetch_t *f, int *status) {
     }
 }
 
+// data: URLs (companion _drawUrl): a small image inline as base64, drawn
+// through the same sniff/decode path as a download. Only still images:
+// data:model is a GLB the gadget has no renderer for.
+static bool is_data_image(const char *url) {
+    return strncasecmp(url, "data:image/", 11) == 0;
+}
+
+static uint8_t *decode_data_url(const char *url, size_t *len_out, const char **message) {
+    const char *comma = strchr(url, ',');
+    if (!comma || comma[1] == '\0') {
+        *message = "data: URL has no payload";
+        return NULL;
+    }
+    bool b64 = false;
+    for (const char *p = url; p + 6 <= comma; p++) {
+        if (strncasecmp(p, "base64", 6) == 0) {
+            b64 = true;
+            break;
+        }
+    }
+    if (!b64) {
+        *message = "data: URL must be base64";
+        return NULL;
+    }
+    size_t cap = (size_t)(strlen(comma + 1) * 3 / 4) + 4;
+    if (cap > GIF_MAX_BYTES + 4) {
+        *message = "data: image is too large";
+        return NULL;
+    }
+    uint8_t *buf =
+        heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) {
+        buf = malloc(cap);
+    }
+    if (!buf) {
+        *message = "failed to allocate";
+        return NULL;
+    }
+    size_t olen = 0;
+    if (mbedtls_base64_decode(buf, cap, &olen, (const unsigned char *)(comma + 1),
+                              strlen(comma + 1)) != 0) {
+        heap_caps_free(buf);
+        *message = "data: base64 decode failed";
+        return NULL;
+    }
+    *len_out = olen;
+    return buf;
+}
+
 static void fetch_task(void *arg) {
     fetch_t *f = arg;
     int64_t start = esp_timer_get_time();
@@ -408,19 +473,25 @@ static void fetch_task(void *arg) {
     image_fetch_result_t result = { .code = "download_failed" };
     log_memory("image download start");
 
-    esp_http_client_config_t cfg = {
-        .url = f->url,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = FETCH_TIMEOUT_MS,
-        .buffer_size = 1024,
-        .buffer_size_tx = 512,
-        .disable_auto_redirect = true,
-        .event_handler = on_http_event,
-        .user_data = f,
-    };
-    f->http = esp_http_client_init(&cfg);
     int status = 0;
-    esp_err_t err = f->http ? open_following_redirects(f, &status) : ESP_ERR_NO_MEM;
+    esp_err_t err;
+    if (f->mem) {
+        err = ESP_OK;
+        status = 200;
+    } else {
+        esp_http_client_config_t cfg = {
+            .url = f->url,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms = FETCH_TIMEOUT_MS,
+            .buffer_size = 1024,
+            .buffer_size_tx = 512,
+            .disable_auto_redirect = true,
+            .event_handler = on_http_event,
+            .user_data = f,
+        };
+        f->http = esp_http_client_init(&cfg);
+        err = f->http ? open_following_redirects(f, &status) : ESP_ERR_NO_MEM;
+    }
     log_memory("image download connected");
     char msg[64];
     if (f->scheme_changed) {
@@ -478,6 +549,7 @@ static void fetch_task(void *arg) {
     log_memory("image download end");
     f->done(&result, f->user);
     free(f->url);
+    heap_caps_free(f->mem);
     free(f);
     atomic_store(&s_busy, false);
     vTaskDelete(NULL);
@@ -492,9 +564,15 @@ bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
         return false;
     }
     bool https = strncasecmp(url, "https://", 8) == 0;
-    if (!https && strncasecmp(url, "http://", 7) != 0) {
+    bool data = !https && is_data_image(url);
+    if (!https && !data && strncasecmp(url, "http://", 7) != 0) {
         *code = "invalid_params";
-        *message = "url must be http:// or https://";
+        if (strncasecmp(url, "data:model/", 11) == 0
+            || strncasecmp(url, "data:application/octet-stream", 29) == 0) {
+            *message = "3D models need a GLTF renderer the gadget doesn't have";
+        } else {
+            *message = "url must be http:// or https://";
+        }
         return false;
     }
     if (row < MIN_ROW || row >= height) {
@@ -532,6 +610,23 @@ bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
         *message = "failed to allocate";
         return false;
     }
+    if (data) {
+        // Decoded before the task starts: a bad payload refuses fast.
+        size_t mem_len = 0;
+        const char *fail = NULL;
+        f->mem = decode_data_url(url, &mem_len, &fail);
+        if (!f->mem) {
+            free(f->url);
+            free(f);
+            atomic_store(&s_busy, false);
+            *code = !strcmp(fail, "failed to allocate") || !strcmp(fail, "data: image is too large")
+                        ? "out_of_memory"
+                        : "invalid_image";
+            *message = fail;
+            return false;
+        }
+        f->mem_len = mem_len;
+    }
     f->https = https;
     f->row = row;
     f->done = done;
@@ -540,6 +635,7 @@ bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
     f->height = height;
     if (xTaskCreate(fetch_task, "image", stack, f, 4, NULL) != pdPASS) {
         free(f->url);
+        heap_caps_free(f->mem);
         free(f);
         atomic_store(&s_busy, false);
         *code = "out_of_memory";

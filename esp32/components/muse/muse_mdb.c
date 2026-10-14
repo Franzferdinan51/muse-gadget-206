@@ -695,12 +695,12 @@ void muse_mdb_handle_line(const char *line)
             out_raw("ERR busy adapter lock held >500ms\n");
         }
     } else if (strcmp(verb, "chirp") == 0) {
-        /* Speaker test at a gentle, capped volume. */
+        /* Speaker test at a gentle, capped volume. Runtime-only: a test
+         * must not rewrite the user's saved volume. */
         char *vs = strtok_r(NULL, " \t", &save);
         int vol = vs ? atoi(vs) : 35;
         if (vol < 1) vol = 1;
         if (vol > 80) vol = 80;
-        muse_settings_set_volume(vol);
         muse_audio_set_volume(vol);
         muse_voice_request_chirp();
         out_fmt("OK chirp vol=%d\n", vol);

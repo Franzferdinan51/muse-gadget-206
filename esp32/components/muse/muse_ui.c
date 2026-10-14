@@ -46,6 +46,7 @@
 #include "muse_state.h"
 #include "muse_text.h"
 #include "muse_theme.h"
+#include "muse_voice.h"
 #include "muse_boot_logo.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_WATCHER_CAMERA
@@ -437,6 +438,13 @@ static void on_ptt_hit(lv_event_t *e)
     muse_input_screen_talk(lv_event_get_code(e) == LV_EVENT_PRESSED);
 }
 
+static void on_repeat_hit(lv_event_t *e)
+{
+    (void)e;
+    muse_state_poke();
+    muse_voice_request_repeat();
+}
+
 /* Icons beside the physical buttons, in place of an instruction caption. */
 static void build_button_icons(lv_obj_t *face)
 {
@@ -458,6 +466,19 @@ static void build_button_icons(lv_obj_t *face)
         lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_RELEASED, NULL);
         lv_obj_add_event_cb(hit, on_ptt_hit, LV_EVENT_PRESS_LOST, NULL);
+    }
+
+    /* "Say it again" (touch boards): a small repeat glyph opposite the aux
+     * icon. A tap replays the last reply; with none stored the caption
+     * says so. Kept dim so the face stays the screen. Right of the
+     * speaker circle (which spans to x=86 plus its click area). */
+    if (muse_board->touch) {
+        lv_obj_t *repeat = make_label(face, s_small ? MUSE_FONT_14 : MUSE_FONT_28, COLOR_DIM);
+        lv_label_set_text(repeat, LV_SYMBOL_REFRESH);
+        lv_obj_align(repeat, LV_ALIGN_TOP_LEFT, 108, 36);
+        lv_obj_clear_flag(repeat, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(repeat, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(repeat, on_repeat_hit, LV_EVENT_CLICKED, NULL);
     }
 
     /* Without touch the aux button opens the menu rather than sleeping. A board
@@ -561,6 +582,11 @@ static void on_speaker_event(lv_event_t *e)
     case LV_EVENT_SHORT_CLICKED:
         if (idle) {
             muse_state_set_caption(on ? "HOLD TO MUTE" : "HOLD TO UNMUTE");
+        } else if (muse_state_mode(NULL) == MUSE_MODE_SPEAKING) {
+            /* A tap mid-reply stops it. Speaking-only: the flag is
+             * consumed by the reply loop, so arming it at any other
+             * time would kill the next reply instead. */
+            muse_voice_request_stop();
         }
         break;
     case LV_EVENT_RELEASED:
@@ -718,7 +744,8 @@ static void add_hides(answer_layout_t *l, int n)
 static void build_answer(lv_obj_t *face, int ring_in)
 {
     int spk_r = (SPEAKER_PX + SPEAKER_GROW_PX) / 2;
-    int spk_x = -s_w / 2 + 8 + spk_r, spk_y = -s_h / 2 + 8 + spk_r;
+    /* 14px clears the physical bezel, which otherwise nips the circle's edge. */
+    int spk_x = -s_w / 2 + 14 + spk_r, spk_y = -s_h / 2 + 14 + spk_r;
     if (muse_board->round) {
         spk_y = -ring_in * 5 / 8;
         int d = ring_in - spk_r - 4;   /* just inside the ring, even when swollen */
@@ -835,9 +862,12 @@ static void build_screen(void)
 
     lv_obj_t *face = scr;
     if (muse_board->touch) {
-        /* Swipe left from Muse for settings. */
+        /* Swipe left from Muse for settings. Transparent, not its own
+         * backdrop: the screen's gradient shows through identically, and
+         * a second full-screen gradient repainted every scroll frame is
+         * what made swipes lag. */
         s_tv = lv_tileview_create(scr);
-        muse_theme_backdrop(s_tv);
+        lv_obj_set_style_bg_opa(s_tv, LV_OPA_TRANSP, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
         s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
@@ -1027,7 +1057,13 @@ static void image_hide_locked(void)
     }
 #if CONFIG_LV_USE_GIF
     if (s_gif_data) {
-        lv_obj_add_flag(s_gif, LV_OBJ_FLAG_HIDDEN);
+        /* Delete the widget first: its timer and decoder reference the
+         * bytes, so freeing first would be a use-after-free. The next
+         * show recreates it. */
+        if (s_gif) {
+            lv_obj_delete(s_gif);
+            s_gif = NULL;
+        }
         heap_caps_free(s_gif_data);
         s_gif_data = NULL;
         s_gif_dsc.data = NULL;
@@ -1035,6 +1071,23 @@ static void image_hide_locked(void)
 #endif
     xSemaphoreGive(s_image_mutex);
 }
+
+#if CONFIG_LV_USE_GIF
+static void on_image_clicked(lv_event_t *e);
+/* With the display lock held. Recreates the GIF widget after a hide. */
+static void gif_ensure_locked(void)
+{
+    if (s_gif) {
+        return;
+    }
+    lv_obj_t *scr = lv_screen_active();
+    s_gif = lv_gif_create(scr);
+    lv_gif_set_color_format(s_gif, LV_COLOR_FORMAT_RGB565);
+    lv_obj_center(s_gif);
+    lv_obj_add_flag(s_gif, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_gif, on_image_clicked, LV_EVENT_CLICKED, NULL);
+}
+#endif
 
 /* Each frame: shows a new image and redraws what the download changed. */
 static void image_sync(void)
@@ -1765,6 +1818,11 @@ static void build_boot_splash(void)
     lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t *img = lv_image_create(o);
+    if (!img) {
+        lv_obj_delete(o);
+        s_splash = NULL;
+        return;
+    }
     lv_image_set_src(img, &muse_boot_logo);
     lv_image_set_scale(img, 205);
     lv_obj_align(img, LV_ALIGN_CENTER, 0, -52);
@@ -1924,7 +1982,10 @@ bool muse_ui_image_size(int *w, int *h)
 
 bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
 {
-    if (!s_ready || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > s_w || y + h > s_h) {
+    /* Subtraction form: x + w could overflow int on hostile input and
+     * slip past an addition-form check into a wild s_image_buf write. */
+    if (!s_ready || x < 0 || y < 0 || w <= 0 || h <= 0 ||
+        w > s_w - x || h > s_h - y) {
         return false;
     }
     xSemaphoreTake(s_image_mutex, portMAX_DELAY);
@@ -1987,6 +2048,11 @@ bool muse_ui_gif_show(uint8_t *data, size_t len)
     }
     muse_board->display_lock(-1);
     image_hide_locked();   /* clears any still image or previous GIF */
+    gif_ensure_locked();
+    if (!s_gif) {
+        muse_board->display_unlock();
+        return false;   /* caller keeps ownership */
+    }
     xSemaphoreTake(s_image_mutex, portMAX_DELAY);
     s_gif_data = data;
     s_gif_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;

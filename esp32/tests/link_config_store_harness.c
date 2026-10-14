@@ -286,6 +286,19 @@ static void test_reset_clears_endpoints_before_credentials(void) {
     }
 }
 
+static void test_intro_sent_is_one_shot_and_device_level(void) {
+    fake_reset();
+    CHECK(!config_intro_sent(), "intro must start unsent");
+    CHECK(config_mark_intro_sent(), "marking intro sent failed");
+    CHECK(config_intro_sent(), "intro must stay sent");
+
+    CHECK(config_clear_pairing(), "pairing clear should succeed");
+    CHECK(config_intro_sent(), "pairing clear deleted the intro flag");
+
+    CHECK(config_clear_setup(), "setup clear should succeed");
+    CHECK(config_intro_sent(), "setup clear deleted the intro flag");
+}
+
 int main(void) {
     test_lookup_is_tri_state();
     test_erase_propagates_commit_failure();
@@ -293,6 +306,7 @@ int main(void) {
     test_pairing_clear_preserves_wifi_channel();
     test_setup_clear_fails_closed_on_uncommitted_credential();
     test_reset_clears_endpoints_before_credentials();
+    test_intro_sent_is_one_shot_and_device_level();
     puts("config_store harness: PASS");
     return 0;
 }

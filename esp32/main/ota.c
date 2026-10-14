@@ -35,17 +35,46 @@ bool ota_is_enabled(void) {
 #include <string.h>
 #include <stdio.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+/* Only one update may touch flash at a time: a second device.ota while
+ * one runs is rejected instead of starting a second flash writer. */
+static portMUX_TYPE s_ota_spinlock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_ota_running;
+
+static bool ota_claim(void)
+{
+    bool busy = false;
+    portENTER_CRITICAL(&s_ota_spinlock);
+    if (s_ota_running) {
+        busy = true;
+    } else {
+        s_ota_running = true;
+    }
+    portEXIT_CRITICAL(&s_ota_spinlock);
+    return !busy;
+}
+
+static void ota_release(void)
+{
+    portENTER_CRITICAL(&s_ota_spinlock);
+    s_ota_running = false;
+    portEXIT_CRITICAL(&s_ota_spinlock);
+}
+
 static const char *TAG = "link.ota";
 
 #define OTA_HTTP_TIMEOUT_MS        30000
+/* Overall cap: per-read timeouts don't stop a trickle that drips forever. */
+#define OTA_OVERALL_TIMEOUT_MS       (8 * 60 * 1000)
 #define OTA_MAX_REDIRECTS          5
 #define OTA_HTTP_TX_BUFFER_BYTES   4096
 #define OTA_USER_AGENT_BYTES       64
@@ -209,9 +238,16 @@ static void ota_task(void *arg) {
         goto done;
     }
 
+    int64_t ota_start_us = esp_timer_get_time();
     while ((err = esp_https_ota_perform(handle)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         // streaming; yield briefly between reads
         vTaskDelay(pdMS_TO_TICKS(1));
+        if (esp_timer_get_time() - ota_start_us > (int64_t)OTA_OVERALL_TIMEOUT_MS * 1000) {
+            ESP_LOGE(TAG, "overall download deadline exceeded");
+            esp_https_ota_abort(handle);
+            emit(ctx, OTA_RESULT_FAILED, "download timed out", new_version, running);
+            goto done;
+        }
     }
     if (err != ESP_OK) {
         char msg[96];
@@ -247,6 +283,7 @@ static void ota_task(void *arg) {
     esp_restart();
 
 done:
+    ota_release();
     free(ctx->url);
     free(ctx);
     stack_monitor_record(NULL);
@@ -254,6 +291,15 @@ done:
 }
 
 void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
+    if (!ota_claim()) {
+        ESP_LOGW(TAG, "update already running, refusing a second one");
+        if (cb) {
+            ota_event_t ev = { .result = OTA_RESULT_FAILED,
+                               .detail = "update already running" };
+            cb(&ev, user);
+        }
+        return;
+    }
     ota_ctx_t *ctx = url && *url ? calloc(1, sizeof(*ctx)) : NULL;
     if (ctx) {
         ctx->url = strdup(url);
@@ -264,6 +310,7 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
     if (!ctx || !ctx->url) {
         ESP_LOGE(TAG, "could not start OTA: %s",
                  url && *url ? "out of memory" : "empty URL");
+        ota_release();
         if (ctx) free(ctx);
         if (cb) {
             ota_event_t ev = { .result = OTA_RESULT_FAILED,
@@ -280,6 +327,7 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
     if (xTaskCreateWithCaps(ota_task, "ota", 16384, ctx, 5, NULL,
                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "could not start OTA task");
+        ota_release();
         free(ctx->url);
         free(ctx);
         if (cb) {

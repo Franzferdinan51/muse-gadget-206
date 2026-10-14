@@ -53,7 +53,12 @@ static esp_err_t open_codecs(void)
         .bits_per_sample = 16,
     };
     ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_spk, &fs) == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "open speaker");
-    ESP_RETURN_ON_FALSE(esp_codec_dev_open(s_mic, &fs) == ESP_CODEC_DEV_OK, ESP_FAIL, TAG, "open mic");
+    if (esp_codec_dev_open(s_mic, &fs) != ESP_CODEC_DEV_OK) {
+        /* Don't leave the speaker half-open with the amp on. */
+        esp_codec_dev_close(s_spk);
+        ESP_LOGE(TAG, "open mic");
+        return ESP_FAIL;
+    }
     s_open = true;
     return ESP_OK;
 }
@@ -270,6 +275,9 @@ esp_err_t muse_audio_read(int16_t *mono, size_t frames)
 
 esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
 {
+    if (!s_spk || !s_open) {
+        return ESP_ERR_INVALID_STATE;
+    }
     /* Speaker off still plays silence at the same pace, so captions timed to
      * the audio scroll as if it were heard. */
     bool mute = !muse_settings_speaker_on();

@@ -145,13 +145,15 @@ static void toggle_phone_setup(void)
 /*
  * Aux button: short press sleeps, a 1.5 s hold powers off, any press wakes.
  * Two quick presses toggle BLE phone setup, so the sleep waits a moment to
- * see whether a second press follows.
+ * see whether a second press follows. The second press only counts as a
+ * double-click when it is released quickly: holding it still powers off.
  */
 static void aux_button(bool pressed, bool edge)
 {
     static int held;
     static bool swallow;
     static bool hinted;
+    static bool maybe_double;   /* second press inside the double window */
     static int sleep_in;    /* ticks until a pending single press sleeps */
     static char saved_caption[64];
 
@@ -161,13 +163,13 @@ static void aux_button(bool pressed, bool edge)
     if (edge && pressed) {
         held = 0;
         hinted = false;
+        maybe_double = false;
         swallow = muse_state_asleep();
         if (swallow) {
             set_asleep(false, muse_board->aux_button);
         } else if (sleep_in) {
             sleep_in = 0;
-            swallow = true;
-            toggle_phone_setup();
+            maybe_double = true;
         }
         return;
     }
@@ -179,13 +181,22 @@ static void aux_button(bool pressed, bool edge)
             muse_state_set_caption("HOLD TO POWER OFF");
             hinted = true;
         } else if (held == LONG_TICKS) {
+            maybe_double = false;
             swallow = true;
             power_off();
         }
         return;
     }
     if (edge && !pressed && !swallow) {
-        if (hinted) {
+        if (maybe_double) {
+            maybe_double = false;
+            if (held < HINT_TICKS) {
+                swallow = true;
+                toggle_phone_setup();
+            } else if (hinted) {
+                muse_state_set_caption("%s", saved_caption);
+            }
+        } else if (hinted) {
             muse_state_set_caption("%s", saved_caption);   /* let go early: cancel */
         } else {
             sleep_in = DOUBLE_TICKS;
@@ -440,7 +451,9 @@ static void input_task(void *arg)
 
     for (;;) {
         unsigned ev = muse_board->poll_buttons();
-        if (muse_board->poll_touch) muse_board->poll_touch();
+        /* Paused, LVGL is stopped and touches go nowhere: skip the I2C
+         * traffic. Buttons still wake (deliberately: no pocket wakes). */
+        if (muse_board->poll_touch && !paused) muse_board->poll_touch();
         muse_ui_apply_pending_brightness();
         if (ev & (MUSE_BTN_TALK_PRESS | MUSE_BTN_TALK_RELEASE)) {
             ESP_LOGI(TAG, "talk key:%s%s", ev & MUSE_BTN_TALK_PRESS ? " press" : "",
@@ -654,6 +667,10 @@ static bool console_command(char *line, bool whole)
         set_face(line + 5);
         return true;
     }
+    if (!strcmp(line, "repeat")) {
+        muse_voice_request_repeat();
+        return true;
+    }
     if (strncmp(line, "chat", 4) != 0) {
         return false;
     }
@@ -684,7 +701,8 @@ static bool console_command(char *line, bool whole)
  * the BLE CMD characteristic, or one of the console's own: "status" prints
  * the device's state, "power" the battery meter (muse_battery.h) and
  * "power.reset" starts it over, "nap" sleeps and leaves Wi-Fi at once (as
- * two minutes asleep on battery would; 'w' rejoins), "face=" shows a face
+ * two minutes asleep on battery would; 'w' rejoins), "repeat" says the last
+ * reply again, "face=" shows a face
  * (see set_face), and "chat=" sends a typed message to Hatch (see chat_line
  * and tools/muse/chat.py).
  */

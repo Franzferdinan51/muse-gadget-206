@@ -31,6 +31,7 @@
 #include "freertos/task.h"
 #include "image_fetch.h"
 #include "led_status.h"
+#include "mbedtls/base64.h"
 #include "rom/tjpgd.h"
 
 #define WIDTH 8
@@ -253,6 +254,52 @@ void *heap_caps_malloc(size_t size, int caps) {
     return malloc(size);
 }
 
+void heap_caps_free(void *ptr) {
+    free(ptr);
+}
+
+static int b64_value(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+int mbedtls_base64_decode(unsigned char *dst, size_t dlen, size_t *olen,
+                          const unsigned char *src, size_t slen) {
+    size_t o = 0;
+    unsigned group = 0;
+    int bits = 0, pad = 0;
+    for (size_t i = 0; i < slen; i++) {
+        unsigned char c = src[i];
+        if (c == '=') {
+            pad++;
+            bits += 6;
+            continue;
+        }
+        int v = b64_value(c);
+        if (v < 0 || pad) {
+            return -1;
+        }
+        group = (group << 6) | (unsigned)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (o >= dlen) {
+                return -1;
+            }
+            dst[o++] = (unsigned char)((group >> bits) & 0xFF);
+        }
+    }
+    if (pad > 2) {
+        return -1;
+    }
+    *olen = o;
+    return 0;
+}
+
 bool led_status_display_info(int *width, int *height) {
     *width = WIDTH;
     *height = HEIGHT;
@@ -391,6 +438,57 @@ static void test_slow_redirect_chain_stops_at_the_limit(void) {
     CHECK(g_max_timeout_overrun_us == 0, "an open could block past the deadline");
 }
 
+static void expect_refused(const char *url, const char *code, const char *message) {
+    const char *got_code = NULL, *got_message = NULL;
+    g_done = false;
+    CHECK(!image_fetch_start(url, 0, on_done, NULL, &got_code, &got_message),
+          "start %s should refuse", url);
+    CHECK(!g_done, "a refused start must not call back");
+    CHECK(got_code && strcmp(got_code, code) == 0, "code %s, want %s",
+          got_code ? got_code : "(null)", code);
+    CHECK(got_message && strcmp(got_message, message) == 0, "message '%s', want '%s'",
+          got_message ? got_message : "(null)", message);
+}
+
+static void test_data_url_draws_inline(void) {
+    reset_server();
+    // 32 raw RGB565 bytes: two screen-width rows, no HTTP involved.
+    fetch("data:image/rgb565;base64,AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+    CHECK(g_result.ok, "data: draw failed: %s", g_result.message);
+    CHECK(strcmp(g_result.format, "rgb565") == 0, "format %s", g_result.format);
+    CHECK(g_rows_drawn == 2, "expected 2 rows, got %d", g_rows_drawn);
+    CHECK(g_result.bytes == 32, "expected 32 bytes, got %u", (unsigned)g_result.bytes);
+    CHECK(g_opens == 0, "data: must not touch HTTP: %d opens", g_opens);
+}
+
+static void test_data_url_rejects_models_and_bad_payloads(void) {
+    expect_refused("data:model/gltf-binary;base64,AAAA", "invalid_params",
+                   "3D models need a GLTF renderer the gadget doesn't have");
+    expect_refused("data:image/png;base64,!!!", "invalid_image",
+                   "data: base64 decode failed");
+    expect_refused("data:image/png,AAAA", "invalid_image",
+                   "data: URL must be base64");
+    expect_refused("data:image/png;base64,", "invalid_image",
+                   "data: URL has no payload");
+}
+
+static void test_data_url_rejects_oversize(void) {
+    // Past the 384 KB inline cap: refused before anything is allocated.
+    size_t n = 600 * 1024;
+    char *url = malloc(32 + n + 1);
+    CHECK(url, "no memory for the oversize URL");
+    memcpy(url, "data:image/png;base64,", 22);
+    memset(url + 22, 'A', n);
+    url[22 + n] = '\0';
+    expect_refused(url, "out_of_memory", "data: image is too large");
+    free(url);
+    // A refusal releases the busy flag, so the next download may start.
+    reset_server();
+    add_response((response_t){.status = 200, .body_len = ROW_BYTES});
+    fetch("http://host/img");
+    CHECK(g_result.ok, "next download after a refusal: %s", g_result.message);
+}
+
 int main(void) {
     test_http_redirect_to_https_is_refused();
     test_https_redirect_to_http_is_refused();
@@ -398,6 +496,9 @@ int main(void) {
     test_same_scheme_redirects_are_followed();
     test_trickled_body_hits_the_deadline();
     test_slow_redirect_chain_stops_at_the_limit();
+    test_data_url_draws_inline();
+    test_data_url_rejects_models_and_bad_payloads();
+    test_data_url_rejects_oversize();
     puts("image_fetch harness: ok");
     return 0;
 }

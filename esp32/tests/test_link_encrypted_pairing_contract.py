@@ -384,7 +384,8 @@ class LinkEncryptedPairingContractTest(unittest.TestCase):
         self.assertIn("PAIRING_PROVISIONING", pairing)
         self.assertIn("PAIRING_PROVISIONING_TIMEOUT_US", pairing)
         self.assertIn("s_state = PAIRING_PROVISIONING", active)
-        self.assertIn("s_deadline_us = esp_timer_get_time() + PAIRING_PROVISIONING_TIMEOUT_US", active)
+        self.assertIn("s_provision_start_us = esp_timer_get_time()", active)
+        self.assertIn("s_deadline_us = s_provision_start_us + PAIRING_PROVISIONING_TIMEOUT_US", active)
         self.assertIn("session_keys_available_locked()", encrypt)
 
     def test_encrypted_provisioning_aborts_when_session_expires(self) -> None:

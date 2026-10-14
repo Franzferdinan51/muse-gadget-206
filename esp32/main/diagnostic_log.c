@@ -251,3 +251,48 @@ void diagnostic_log_snapshot_free(diagnostic_log_snapshot_t *snapshot) {
     free(snapshot->data);
     memset(snapshot, 0, sizeof(*snapshot));
 }
+
+size_t diagnostic_log_tail_lines(size_t max_lines, char *out, size_t cap) {
+    if (out && cap) out[0] = '\0';
+    if (!out || !cap || !max_lines) return 0;
+    if (!atomic_load_explicit(&s_installed, memory_order_acquire)
+        || !s_ring || !s_lock) {
+        return 0;
+    }
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) return 0;
+
+    // Walk back from the tail over whole lines (records always end in \n),
+    // past one extra terminator so the span starts on a line.
+    size_t end = (s_head + s_len) % DIAGNOSTIC_LOG_CAPACITY_BYTES;
+    size_t take = 0, ends = 0;
+    while (take < s_len && ends <= max_lines) {
+        size_t off = (end + DIAGNOSTIC_LOG_CAPACITY_BYTES - take - 1)
+                     % DIAGNOSTIC_LOG_CAPACITY_BYTES;
+        take++;
+        if (s_ring[off] == '\n') ends++;
+    }
+    size_t src = (end + DIAGNOSTIC_LOG_CAPACITY_BYTES - take)
+                 % DIAGNOSTIC_LOG_CAPACITY_BYTES;
+    size_t lines = ends <= max_lines ? ends : max_lines;
+    if (ends > max_lines) {
+        src = (src + 1) % DIAGNOSTIC_LOG_CAPACITY_BYTES;
+        take--;
+    }
+    // Truncation drops oldest lines first, never splitting one.
+    while (take + 1 > cap) {
+        char c;
+        do {
+            c = s_ring[src];
+            src = (src + 1) % DIAGNOSTIC_LOG_CAPACITY_BYTES;
+            take--;
+        } while (take > 0 && c != '\n');
+        lines--;
+    }
+    size_t first = DIAGNOSTIC_LOG_CAPACITY_BYTES - src;
+    if (first > take) first = take;
+    memcpy(out, s_ring + src, first);
+    if (first < take) memcpy(out + first, s_ring, take - first);
+    out[take] = '\0';
+    xSemaphoreGive(s_lock);
+    return lines;
+}

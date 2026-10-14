@@ -23,6 +23,9 @@
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "lvgl.h"
 
 #include "muse_audio.h"
 #include "muse_battery.h"
@@ -898,6 +901,40 @@ static void build_hatch_page(lv_obj_t *tile)
                "Reset pairing forgets Wi-Fi and the app pairing, then restarts.");
 }
 
+/* Link VM lookup off the LVGL task (see tick_hatch): the token the lookup
+ * hands back is freed here, and the label update runs back on LVGL. */
+static char s_link_vm[MUSE_VM_MAX + 1];
+static int64_t s_link_vm_at_us;
+
+static void link_vm_apply(void *arg)
+{
+    char *text = arg;
+    if (text) {
+        strlcpy(s_link_vm, text, sizeof(s_link_vm));
+        free(text);
+    }
+    set_text(s_hatch_vm, s_link_vm[0] ? s_link_vm : "Set (via Muse link)");
+}
+
+static void link_vm_task(void *arg)
+{
+    (void)arg;
+    char id[MUSE_VM_MAX + 1] = "", name[48] = "";
+    char *tok = NULL;
+    char *text = malloc(MUSE_VM_MAX + 1);
+    if (text) {
+        text[0] = '\0';
+        if (muse_link_hatch_vm("", id, sizeof(id), name, sizeof(name), &tok) && id[0]) {
+            strlcpy(text, name[0] ? name : id, MUSE_VM_MAX + 1);
+        }
+        free(tok);
+        if (lv_async_call(link_vm_apply, text) != LV_RES_OK) {
+            free(text);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
 static void tick_hatch(void)
 {
     char link[64];
@@ -924,18 +961,13 @@ static void tick_hatch(void)
     bool linked = muse_link_hatch_linked();
     if (!vm[0] && linked) {
         /* Paired via the Muse app: the VM lives in the Link store, not
-         * in these settings. Ask the Link (cached: this ticks per second). */
-        static char s_link_vm[MUSE_VM_MAX + 1];
-        static int64_t s_link_vm_at_us;
+         * in these settings. The lookup blocks on the network (gate +
+         * HTTPS), so it runs on a worker and lands via async call: this
+         * tick runs on the LVGL task and must never wait on it. */
         int64_t now_us = esp_timer_get_time();
         if (!s_link_vm[0] || now_us - s_link_vm_at_us > 5000000) {
-            char id[MUSE_VM_MAX + 1] = "", name[48] = "";
-            char *tok = NULL;
-            s_link_vm[0] = '\0';
-            if (muse_link_hatch_vm("", id, sizeof(id), name, sizeof(name), &tok) && id[0]) {
-                strlcpy(s_link_vm, name[0] ? name : id, sizeof(s_link_vm));
-            }
-            s_link_vm_at_us = now_us;
+            s_link_vm_at_us = now_us;   /* rate-limit spawns; result lands async */
+            xTaskCreate(link_vm_task, "link_vm", 4096, NULL, 4, NULL);
         }
         set_text(s_hatch_vm, s_link_vm[0] ? s_link_vm : "Set (via Muse link)");
     } else {

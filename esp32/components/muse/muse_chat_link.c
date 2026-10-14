@@ -347,6 +347,9 @@ static bool related(const row_t *row)
 static void text_append(char *out, size_t cap, const char *text)
 {
     size_t used = strlen(out), n = strlen(text);
+    if (used + 1 >= cap) {
+        return;   /* full: cap - used - 1 would underflow below */
+    }
     if (n >= cap - used) {
         n = cap - used - 1;
         while (n && ((unsigned char)text[n] & 0xc0) == 0x80) n--;
@@ -539,7 +542,14 @@ static void emit(muse_hatch_ev_t type, const char *text)
 {
     ev_t ev = { .type = type };
     strlcpy(ev.text, text ? text : "", sizeof(ev.text));
-    xQueueSend(s_events, &ev, 0);
+    if (xQueueSend(s_events, &ev, 0) != pdTRUE &&
+        (type == MUSE_HATCH_EV_DONE || type == MUSE_HATCH_EV_ERROR)) {
+        /* A burst of deltas can fill the queue; the terminal event must
+         * still land or the voice task waits forever. Drop the oldest. */
+        ev_t drop;
+        xQueueReceive(s_events, &drop, 0);
+        xQueueSend(s_events, &ev, 0);
+    }
 }
 
 static void end_turn(void)
@@ -910,4 +920,27 @@ size_t muse_hatch_mp3_selftest(int16_t **pcm)
 {
     *pcm = NULL;
     return 0;
+}
+
+/* Repeat and auto-draw ride the session backend's stored reply; the
+ * no-PSRAM Link backend keeps no reply past the turn. */
+bool muse_hatch_last_reply(char *out, size_t cap)
+{
+    if (cap) {
+        out[0] = '\0';
+    }
+    return false;
+}
+
+bool muse_hatch_repeat_last(void)
+{
+    return false;
+}
+
+bool muse_hatch_take_reply_image(char *out, size_t cap)
+{
+    if (cap) {
+        out[0] = '\0';
+    }
+    return false;
 }

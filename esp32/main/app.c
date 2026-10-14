@@ -78,6 +78,7 @@
 #include "boards/watcher_camera.h"
 #endif
 #if CONFIG_MUSE_ENABLED
+#include "muse_chat.h"
 #include "muse_glue.h"
 // Muse joins Wi-Fi from its own settings, before or without pairing.
 #define WIFI_WITHOUT_PAIRING 1
@@ -1586,6 +1587,55 @@ static void avatar_restore_once(void) {
     }
     done = true;
 }
+
+#if CONFIG_MUSE_ENABLED
+/* A reply that links an image draws it, like the companion's
+ * onAssistantDone: at most one per turn, never persisted (avatar.set owns
+ * the persisted face). A refused start keeps the URL for the next beat. */
+static void reply_image_done(const image_fetch_result_t *r, void *user) {
+    (void)user;
+    ESP_LOGI(TAG, "reply image %s (%s)", r->ok ? "drawn" : "failed",
+             r->ok ? r->format : r->message);
+}
+
+static void reply_image_poll(void) {
+    static char pending[385];
+    static bool logged;
+    if (!pending[0]) {
+        if (!muse_hatch_take_reply_image(pending, sizeof(pending)) || !pending[0]) {
+            return;
+        }
+        logged = false;
+    }
+    const char *code, *message;
+    if (!image_fetch_start(pending, IMAGE_FETCH_DEFAULT_ROW, reply_image_done,
+                           NULL, &code, &message)) {
+        if (!logged) {
+            ESP_LOGW(TAG, "reply image deferred: %s", message);
+            logged = true;
+        }
+        return;
+    }
+    pending[0] = '\0';
+}
+
+/* The agent's own portrait from GET /identity: drawn once like the
+ * companion does, never persisted (avatar.set owns the persisted face).
+ * Runs on the control session task; the fetch runs on its own task. */
+static void identity_avatar_done(const image_fetch_result_t *r, void *user) {
+    (void)user;
+    ESP_LOGI(TAG, "identity avatar %s (%s)", r->ok ? "drawn" : "failed",
+             r->ok ? r->format : r->message);
+}
+
+static void on_agent_avatar(const char *url) {
+    const char *code, *message;
+    if (!image_fetch_start(url, IMAGE_FETCH_DEFAULT_ROW, identity_avatar_done,
+                           NULL, &code, &message)) {
+        ESP_LOGW(TAG, "identity avatar skipped: %s", message);
+    }
+}
+#endif
 #endif
 
 #if CONFIG_MUSE_WATCHER_CAMERA
@@ -2106,7 +2156,9 @@ static cJSON *on_ws_command(
         }
         int row_y = cJSON_IsNumber(y) ? y->valueint : s_stream_y;
         int row_h = (int)(out_len / ((size_t)s_stream_w * 2));
-        if (row_y < 0 || row_h <= 0 || row_y + row_h > s_stream_h) {
+        /* Subtraction form: row_y comes from the wire and row_y + row_h
+         * could overflow past an addition-form check. */
+        if (row_y < 0 || row_h <= 0 || row_y > s_stream_h - row_h) {
             free(decoded);
             return command_error("invalid_param", "rows exceed image height");
         }
@@ -2792,6 +2844,9 @@ void app_run(void) {
     noise_ctrl_init(identity_node_id(), identity_ble_name(), on_ws_control_status);
     noise_ctrl_set_command_cb(on_ws_command);
     noise_ctrl_set_agent_name_cb(led_status_set_title);
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS && CONFIG_MUSE_ENABLED
+    noise_ctrl_set_agent_avatar_cb(on_agent_avatar);
+#endif
     heap_snapshot("after noise_ctrl_init");
 
     // Arm OTA rollback verification. If the running image was just installed
@@ -3046,6 +3101,9 @@ void app_run(void) {
         if (wifi_mgr_is_connected()) {
             avatar_restore_once();
         }
+#if CONFIG_MUSE_ENABLED
+        reply_image_poll();
+#endif
 #endif
 
         // Reconcile the data-plane view with the tunnel's real state. The tunnel

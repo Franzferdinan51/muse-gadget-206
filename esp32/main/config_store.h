@@ -57,3 +57,8 @@ bool config_is_provisioned(void);
 bool config_setup_complete(void);
 bool config_mark_setup_complete(void);
 bool config_clear_setup_complete(void);
+
+// Muse's one-shot introduction (companion storage.dart muse_intro_sent):
+// device-level, so pairing and setup clears preserve it.
+bool config_intro_sent(void);
+bool config_mark_intro_sent(void);

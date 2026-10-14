@@ -50,6 +50,9 @@ static const char *TAG = "link.pairing";
 #define PAIRING_RECORD_LABEL "hatch-link ble setup v1"
 #define PAIRING_TIMEOUT_US (120LL * 1000000LL)
 #define PAIRING_PROVISIONING_TIMEOUT_US (120LL * 1000000LL)
+/* Extends keep a slow-but-alive peer going, but provisioning as a whole
+ * still ends: no more than three windows from the moment it started. */
+#define PAIRING_PROVISIONING_MAX_US (3 * PAIRING_PROVISIONING_TIMEOUT_US)
 #define PAIRING_CLIENT_FINISHED_TIMEOUT_US (60LL * 1000000LL)
 #define PAIRING_CONFIRM_TIMEOUT_US (PAIRING_CONFIRM_TIMEOUT_SECONDS * 1000000LL)
 
@@ -108,6 +111,7 @@ static char s_session_id_b64[32];
 static char s_device_proof_b64[96];
 
 static int64_t s_deadline_us;
+static int64_t s_provision_start_us;
 static uint64_t s_rx_counter;
 static uint64_t s_tx_counter;
 
@@ -937,6 +941,32 @@ bool link_pairing_confirmation_required(void) {
     return required;
 }
 
+int link_pairing_wizard_step(bool paired) {
+    if (paired) return 4;
+    lock_take();
+    pairing_state_t state = expired_locked() ? PAIRING_IDLE : s_state;
+    lock_give();
+    switch (state) {
+        case PAIRING_WAIT_CLIENT_FINISHED: return 1;
+        case PAIRING_CONFIRM_REQUIRED: return 2;
+        case PAIRING_READY:
+        case PAIRING_PROVISIONING: return 3;
+        case PAIRING_IDLE:
+        default: return 0;
+    }
+}
+
+const char *link_pairing_wizard_text(int step) {
+    switch (step) {
+        case 0: return "Waiting for the Muse app";
+        case 1: return "Handshake with the app";
+        case 2: return "Confirm on both sides";
+        case 3: return "Verifying credentials";
+        case 4: return "Paired";
+        default: return "";
+    }
+}
+
 bool link_pairing_arm_confirmation(uint32_t generation) {
     lock_take();
     bool ok = generation != 0 && generation == s_generation && !expired_locked()
@@ -975,7 +1005,8 @@ uint32_t link_pairing_mark_provisioning_active(void) {
     if (!expired_locked() && s_state == PAIRING_READY) {
         advance_generation_locked();
         s_state = PAIRING_PROVISIONING;
-        s_deadline_us = esp_timer_get_time() + PAIRING_PROVISIONING_TIMEOUT_US;
+        s_provision_start_us = esp_timer_get_time();
+        s_deadline_us = s_provision_start_us + PAIRING_PROVISIONING_TIMEOUT_US;
     }
     uint32_t generation = s_state == PAIRING_PROVISIONING ? s_generation : 0;
     lock_give();
@@ -995,7 +1026,10 @@ bool link_pairing_extend_provisioning_deadline(uint32_t generation) {
     bool valid = (generation == 0 || generation == s_generation)
                  && !expired_locked() && s_state == PAIRING_PROVISIONING;
     if (valid) {
-        s_deadline_us = esp_timer_get_time() + PAIRING_PROVISIONING_TIMEOUT_US;
+        int64_t now = esp_timer_get_time();
+        int64_t cap = s_provision_start_us + PAIRING_PROVISIONING_MAX_US;
+        int64_t next = now + PAIRING_PROVISIONING_TIMEOUT_US;
+        s_deadline_us = next < cap ? next : cap;
     }
     lock_give();
     return valid;

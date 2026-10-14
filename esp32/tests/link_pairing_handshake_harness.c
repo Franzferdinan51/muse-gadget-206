@@ -415,6 +415,26 @@ int main(void) {
     stale_confirmation_work_cannot_affect_replacement();
     provisioning_and_scan_work_cannot_cross_sessions();
     pairing_confirmed_carries_sdk_token();
+    {
+        // Wizard steps mirror pairing_screen.dart: 0 waiting, 1 handshake,
+        // 2 confirm, 3 verifying, 4 done.
+        reboot(0);
+        assert(link_pairing_wizard_step(false) == 0);
+        s_state = PAIRING_WAIT_CLIENT_FINISHED;
+        assert(link_pairing_wizard_step(false) == 1);
+        s_state = PAIRING_CONFIRM_REQUIRED;
+        assert(link_pairing_wizard_step(false) == 2);
+        s_state = PAIRING_READY;
+        assert(link_pairing_wizard_step(false) == 3);
+        s_state = PAIRING_PROVISIONING;
+        assert(link_pairing_wizard_step(false) == 3);
+        s_state = PAIRING_IDLE;
+        assert(link_pairing_wizard_step(true) == 4);
+        assert(strcmp(link_pairing_wizard_text(0), "Waiting for the Muse app") == 0);
+        assert(strcmp(link_pairing_wizard_text(4), "Paired") == 0);
+        assert(link_pairing_wizard_text(-1)[0] == '\0');
+        assert(link_pairing_wizard_text(5)[0] == '\0');
+    }
     printf("PASS actual pairing: eFuse=%d, explicit auth/policy agreement, encrypted finished/confirmation/replay/timeouts\n",
            TEST_PAIRING_EFUSE_AUTH);
     return 0;

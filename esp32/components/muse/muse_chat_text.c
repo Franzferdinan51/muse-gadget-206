@@ -360,6 +360,243 @@ const char *muse_activity_caption(const char *code)
     return o ? generic : NULL;
 }
 
+static const char *skip_blank(const char *s)
+{
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') {
+        s++;
+    }
+    return s;
+}
+
+bool muse_repeat_pick(const char *reply, const char *status, char *out, size_t cap)
+{
+    if (cap) {
+        out[0] = '\0';
+    } else {
+        return false;
+    }
+    const char *src = skip_blank(reply ? reply : "");
+    if (!*src) {
+        src = skip_blank(status ? status : "");
+    }
+    if (!*src || !strcmp(src, "Listening…")) {
+        return false;
+    }
+    strlcpy(out, src, cap);
+    size_t n = strlen(out);
+    while (n && (out[n - 1] == ' ' || out[n - 1] == '\t' || out[n - 1] == '\n' || out[n - 1] == '\r')) {
+        out[--n] = '\0';
+    }
+    return out[0] != '\0';
+}
+
+static bool has_image_ext(const char *path, size_t len)
+{
+    static const char *exts[] = { ".png", ".jpg", ".jpeg", ".webp", ".gif" };
+    for (size_t e = 0; e < sizeof(exts) / sizeof(exts[0]); e++) {
+        size_t n = strlen(exts[e]);
+        if (len < n) {
+            continue;
+        }
+        size_t i = 0;
+        while (i < n) {
+            char a = path[len - n + i], b = exts[e][i];
+            if (a >= 'A' && a <= 'Z') {
+                a += 'a' - 'A';
+            }
+            if (a != b) {
+                break;
+            }
+            i++;
+        }
+        if (i == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool muse_reply_image_url(const char *text, char *out, size_t cap)
+{
+    if (cap) {
+        out[0] = '\0';
+    }
+    if (!text || !cap) {
+        return false;
+    }
+    static const char scheme[] = "https://";
+    for (const char *p = text; *p; p++) {
+        size_t i = 0;
+        while (scheme[i]) {
+            char c = p[i];
+            if (c >= 'A' && c <= 'Z') {
+                c += 'a' - 'A';
+            }
+            if (c != scheme[i]) {
+                break;
+            }
+            i++;
+        }
+        if (scheme[i]) {
+            continue;
+        }
+        const char *end = p;
+        while (*end && (unsigned char)*end > 32 && *end != '"' && *end != '\'' && *end != '<' && *end != '>') {
+            end++;
+        }
+        const char *t = end;
+        while (t > p) {
+            char c = t[-1];
+            if (c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?') {
+                t--;
+                continue;
+            }
+            if (c == ')' || c == ']') {
+                char open = c == ')' ? '(' : '[';
+                int depth = 0;
+                for (const char *q = p; q < t; q++) {
+                    if (*q == open) {
+                        depth++;
+                    } else if (*q == c) {
+                        depth--;
+                    }
+                }
+                if (depth < 0) {
+                    t--;
+                    continue;
+                }
+            }
+            break;
+        }
+        const char *host = p + sizeof(scheme) - 1;
+        const char *ps = host;
+        while (ps < t && *ps != '/' && *ps != '?' && *ps != '#') {
+            ps++;
+        }
+        if (ps == host) {
+            continue;   /* no host */
+        }
+        const char *pe = ps;
+        while (pe < t && *pe != '?' && *pe != '#') {
+            pe++;
+        }
+        if (!has_image_ext(ps, (size_t)(pe - ps))) {
+            continue;
+        }
+        size_t n = (size_t)(t - p);
+        if (n + 1 > cap) {
+            continue;   /* a URL is exact or useless; try the next one */
+        }
+        memcpy(out, p, n);
+        out[n] = '\0';
+        return true;
+    }
+    return false;
+}
+
+static bool is_avatar_key(const char *key, size_t len)
+{
+    static const char *keys[] = {
+        "avatar_url", "avatar", "image_url", "image", "portrait_url", "portrait",
+        "character_url", "character_image", "picture_url", "picture",
+        "photo_url", "photo", "icon_url",
+    };
+    for (size_t k = 0; k < sizeof(keys) / sizeof(keys[0]); k++) {
+        size_t n = strlen(keys[k]);
+        if (len != n) {
+            continue;
+        }
+        size_t i = 0;
+        while (i < n) {
+            char c = key[i];
+            if (c >= 'A' && c <= 'Z') {
+                c += 'a' - 'A';
+            }
+            if (c != keys[k][i]) {
+                break;
+            }
+            i++;
+        }
+        if (i == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_avatar_url(const char *v, size_t len)
+{
+    static const char *schemes[] = { "https://", "http://", "data:image/", "data:model/" };
+    for (size_t s = 0; s < sizeof(schemes) / sizeof(schemes[0]); s++) {
+        size_t n = strlen(schemes[s]);
+        if (len >= n && !memcmp(v, schemes[s], n)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool muse_identity_avatar_url(const char *json, char *out, size_t cap)
+{
+    if (cap) {
+        out[0] = '\0';
+    }
+    if (!json || !cap) {
+        return false;
+    }
+    for (const char *p = json; *p; p++) {
+        if (*p != '"') {
+            continue;
+        }
+        const char *ke = p + 1;
+        while (*ke && *ke != '"') {
+            ke++;
+        }
+        if (!*ke) {
+            return false;
+        }
+        bool want = is_avatar_key(p + 1, (size_t)(ke - p - 1));
+        const char *v = skip_blank(ke + 1);
+        if (*v != ':') {
+            continue;
+        }
+        v = skip_blank(v + 1);
+        if (*v != '"') {
+            continue;
+        }
+        const char *ve = v + 1;
+        while (*ve && (*ve != '"' || ve[-1] == '\\')) {
+            ve++;
+        }
+        if (want && *ve && is_avatar_url(v + 1, (size_t)(ve - v - 1))) {
+            size_t n = (size_t)(ve - v - 1);
+            if (n + 1 <= cap) {
+                memcpy(out, v + 1, n);
+                out[n] = '\0';
+                return true;
+            }
+        }
+        p = *ve ? ve : ve - 1;
+    }
+    return false;
+}
+
+uint32_t muse_speak_claim(uint32_t *slot)
+{
+    if (!slot) {
+        return 0;
+    }
+    if (++*slot == 0) {
+        ++*slot;   /* zero is no generation in flight */
+    }
+    return *slot;
+}
+
+bool muse_speak_is_latest(const uint32_t *slot, uint32_t gen)
+{
+    return slot && gen && *slot == gen;
+}
+
 /* ---- Typed turns on the serial console ---- */
 
 /* JSON-escapes whole characters of *src into out, up to cap - 1 bytes; moves *src past them. */

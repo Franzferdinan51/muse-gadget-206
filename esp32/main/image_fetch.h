@@ -52,10 +52,11 @@ typedef void (*image_fetch_done_cb)(const image_fetch_result_t *result, void *us
 // Download an image over HTTP(S) and draw it as it arrives, starting at
 // `row`, with the status on top. Takes a baseline JPEG, shrunk 1/2, 1/4 or
 // 1/8 as needed to fit and centred across, or raw RGB565 (high byte first)
-// in whole screen-width rows. On boards with the full UI, `row` may also be
-// IMAGE_FETCH_CENTRE, which centres a JPEG down the screen (raw data starts at
-// the top). E-paper shows it once it is all in. One download runs at a time,
-// on its own task, and only when there is memory to spare.
+// in whole screen-width rows. A data:image/...;base64, URL draws the same
+// formats inline (capped like a GIF). On boards with the full UI, `row` may
+// also be IMAGE_FETCH_CENTRE, which centres a JPEG down the screen (raw data
+// starts at the top). E-paper shows it once it is all in. One download runs
+// at a time, on its own task, and only when there is memory to spare.
 //
 // Returns false with `code`/`message` set if the download cannot start
 // (busy, low memory, no display); otherwise `done` runs later on the

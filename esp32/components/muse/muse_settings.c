@@ -136,6 +136,7 @@ esp_err_t muse_settings_init(void)
     s.volume = clampi(s.volume, 0, 100);
     s.mic_gain = clampi(s.mic_gain, 0, MUSE_MIC_GAIN_MAX);
     s.brightness = clampi(s.brightness, 10, 100);
+    s.sleep_s = clampi(s.sleep_s, 0, 3600);   /* corrupt NVS must not kill auto-sleep */
     ESP_LOGI(TAG, "vol %d%s, mic %d dB, bright %d, sleep %ds, wifi %s (%s), ble %s, muse %s",
              s.volume, s.speaker_on ? "" : " (speaker off)", s.mic_gain, s.brightness, s.sleep_s, s.wifi_on ? "on" : "off",
              "network saved by Link", s.ble_on ? "on" : "off", s.token[0] ? "token set" : "no token");
@@ -147,13 +148,13 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
     s_listener = cb;
 }
 
-int muse_settings_volume(void) { return s.volume; }
-bool muse_settings_speaker_on(void) { return s.speaker_on; }
-int muse_settings_mic_gain(void) { return s.mic_gain; }
-int muse_settings_brightness(void) { return s.brightness; }
-int muse_settings_sleep_s(void) { return s.sleep_s; }
-bool muse_settings_wifi_on(void) { return s.wifi_on; }
-bool muse_settings_ble_on(void) { return s.ble_on; }
+int muse_settings_volume(void) { int v; LOCKED(v = s.volume); return v; }
+bool muse_settings_speaker_on(void) { bool v; LOCKED(v = s.speaker_on); return v; }
+int muse_settings_mic_gain(void) { int v; LOCKED(v = s.mic_gain); return v; }
+int muse_settings_brightness(void) { int v; LOCKED(v = s.brightness); return v; }
+int muse_settings_sleep_s(void) { int v; LOCKED(v = s.sleep_s); return v; }
+bool muse_settings_wifi_on(void) { bool v; LOCKED(v = s.wifi_on); return v; }
+bool muse_settings_ble_on(void) { bool v; LOCKED(v = s.ble_on); return v; }
 
 /* Home Link owns the saved networks (this is the first); the local copy is only a fallback. */
 void muse_settings_wifi(char ssid[MUSE_SSID_MAX + 1], char pass[MUSE_PASS_MAX + 1])
@@ -193,50 +194,54 @@ size_t muse_settings_hatch_token_len(void)
 
 void muse_settings_set_volume(int pct)
 {
-    s.volume = clampi(pct, 0, 100);
-    save_u8("volume", s.volume);
+    int v = clampi(pct, 0, 100);
+    LOCKED(s.volume = v);
+    save_u8("volume", (uint8_t)v);
     notify(MUSE_SETTING_VOLUME);
 }
 
 void muse_settings_set_speaker_on(bool on)
 {
-    s.speaker_on = on;
+    LOCKED(s.speaker_on = on);
     save_u8("speaker", on);
     notify(MUSE_SETTING_SPEAKER);
 }
 
 void muse_settings_set_mic_gain(int db)
 {
-    s.mic_gain = clampi(db, 0, MUSE_MIC_GAIN_MAX);
-    save_u8("mic_gain", s.mic_gain);
+    int v = clampi(db, 0, MUSE_MIC_GAIN_MAX);
+    LOCKED(s.mic_gain = v);
+    save_u8("mic_gain", (uint8_t)v);
     notify(MUSE_SETTING_MIC_GAIN);
 }
 
 void muse_settings_set_brightness(int pct)
 {
-    s.brightness = clampi(pct, 10, 100);
-    save_u8("bright", s.brightness);
+    int v = clampi(pct, 10, 100);
+    LOCKED(s.brightness = v);
+    save_u8("bright", (uint8_t)v);
     notify(MUSE_SETTING_BRIGHTNESS);
 }
 
 void muse_settings_set_sleep_s(int secs)
 {
-    s.sleep_s = clampi(secs, 0, 3600);
-    nvs_set_u16(s_nvs, "sleep_s", s.sleep_s);
+    int v = clampi(secs, 0, 3600);
+    LOCKED(s.sleep_s = (uint16_t)v);
+    nvs_set_u16(s_nvs, "sleep_s", (uint16_t)v);
     nvs_commit(s_nvs);
     notify(MUSE_SETTING_SLEEP);
 }
 
 void muse_settings_set_wifi_on(bool on)
 {
-    s.wifi_on = on;
+    LOCKED(s.wifi_on = on);
     save_u8("wifi_on", on);
     notify(MUSE_SETTING_WIFI);
 }
 
 void muse_settings_set_ble_on(bool on)
 {
-    s.ble_on = on;
+    LOCKED(s.ble_on = on);
     save_u8("ble_on", on);
     notify(MUSE_SETTING_BLE);
 }

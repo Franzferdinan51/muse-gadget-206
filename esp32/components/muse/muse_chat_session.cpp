@@ -131,7 +131,7 @@ static const char *TAG = "muse_chat_session";
 
 /* ---- Voice task <-> session task ---- */
 
-enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE };
+enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_REPEAT, CMD_WAKE };
 
 struct cmd_t {
     cmd_type_t type;
@@ -257,10 +257,16 @@ enum mark_t : uint8_t { M_RELEASE, M_SENT, M_ACK, M_TEXT, M_DONE, M_TTS, M_MP3, 
 static const char *const MARK_NAMES[M_COUNT] = { "release", "sent", "ack", "text", "done", "tts", "mp3", "audio" };
 static int64_t s_marks[M_COUNT];
 static char s_reply_shown[EV_TEXT];   /* the pre-speech caption last sent */
+/* The last finished reply (speakable form) and its first image URL, kept
+ * past the turn for "say it again" and reply-image auto-draw. */
+static char s_last_reply[MUSE_SPEAKABLE_LIMIT + 1];
+static char s_reply_image[384];
 
 static void mark(mark_t m);
 static bool open_note(void);
 static void log_marks(void);
+static void append_text(msg_t &m, const char *text);
+static void show_reply_start(const msg_t &m);
 static int16_t *s_pcm;       /* MINIMP3_MAX_SAMPLES_PER_FRAME */
 static int16_t *s_pcm16;     /* resampled output */
 static int64_t s_last_seq;
@@ -1040,6 +1046,33 @@ static void turn_begin(uint32_t gen)
     s_turn.phase = P_LISTEN;
 }
 
+/* "Say it again": the stored reply as a fresh one-message turn, driven by
+ * the usual TTS drain (re-spoken with a key, shown at reading pace
+ * without one). A press or typed turn interrupts it like any turn. */
+static void repeat_begin(uint32_t gen)
+{
+    if (s_turn.phase != P_IDLE || !s_last_reply[0] || !s_connected) {
+        return;
+    }
+    if (!turn_start(gen, false)) {
+        return;
+    }
+    msg_t &m = s_turn.msgs[0];
+    strlcpy(m.id, "repeat", sizeof(m.id));
+    append_text(m, s_last_reply);
+    if (!m.len) {
+        turn_fail("NOTHING TO SAY YET");
+        return;
+    }
+    s_turn.nmsgs = 1;
+    m.done = true;
+    m.tts = TTS_QUEUED;
+    s_turn.phase = P_WAIT_REPLY;
+    s_turn.last_event_us = s_turn.last_content_us = now_us();
+    ESP_LOGI(TAG, "repeating the last reply (%u chars)", (unsigned)m.len);
+    show_reply_start(m);
+}
+
 /* Moves mic audio to the dictation stream, paced like a live mic. */
 static bool pump_mic(void)
 {
@@ -1363,6 +1396,26 @@ static void show_reply_start(const msg_t &m)
     }
 }
 
+/* The finished reply, remembered for "say it again" and reply-image
+ * auto-draw. The last message with text wins. */
+static void remember_reply(int i)
+{
+    msg_t &m = s_turn.msgs[i];
+    if (!m.len) {
+        return;
+    }
+    const char *full = s_turn.texts ? s_turn.texts + i * TEXT_MAX : m.tail;
+    char clean[MUSE_SPEAKABLE_LIMIT + 1];
+    muse_speakable_reply(full, clean, sizeof(clean));
+    if (clean[0]) {
+        strlcpy(s_last_reply, clean, sizeof(s_last_reply));
+    }
+    char img[sizeof(s_reply_image)];
+    if (muse_reply_image_url(full, img, sizeof(img))) {
+        strlcpy(s_reply_image, img, sizeof(s_reply_image));
+    }
+}
+
 static void message_done(int i, const char *final_text)
 {
     msg_t &m = s_turn.msgs[i];
@@ -1378,6 +1431,10 @@ static void message_done(int i, const char *final_text)
             n = strlen(final_text);
             muse_hatch_console("final", final_text, "\"msg\":%d", i);
         }
+        if (!m.len && final_text && final_text[0]) {
+            append_text(m, final_text);
+        }
+        remember_reply(i);
         muse_hatch_console("message_done", nullptr, "\"msg\":%d,\"bytes\":%u", i, (unsigned)n);
         ESP_LOGI(TAG, "message %s done (%u chars)", m.id, (unsigned)n);
         return;
@@ -1385,6 +1442,7 @@ static void message_done(int i, const char *final_text)
     if (!m.len && final_text && final_text[0]) {
         append_text(m, final_text);
     }
+    remember_reply(i);
     if (m.len && m.tts == TTS_NONE) {
         m.tts = TTS_QUEUED;
     }
@@ -1434,6 +1492,13 @@ static void on_event(cJSON *line)
         if (s_turn.text && s_turn.agent_busy != was) {
             muse_hatch_console("busy", nullptr, "\"on\":%s", s_turn.agent_busy ? "true" : "false");
         }
+        if (!s_turn.text && s_turn.agent_busy) {
+            /* Thinking/Searching/Using-tool while the reply is on its way. */
+            const char *label = muse_activity_caption(code && code[0] ? code : (status ? status : ""));
+            if (label) {
+                emit(MUSE_HATCH_EV_BUSY, label);
+            }
+        }
         s_turn.last_event_us = now_us();
         return;
     }
@@ -1478,6 +1543,12 @@ static void on_chat_ack(stream_t *s)
 {
     s->line[s->len] = '\0';
     cJSON *root = cJSON_Parse(s->line);
+    if (!root) {
+        /* Don't ack garbage: the turn would wait for a reply to a note
+         * the VM never confirmed. */
+        turn_fail("BAD REPLY FROM MUSE");
+        return;
+    }
     cJSON *result = cJSON_GetObjectItem(root, "result");
     cJSON *obj = cJSON_IsObject(result) ? result : root;
     const char *keys[] = { "message_id", "reply_to_message_id" };
@@ -2123,6 +2194,11 @@ static void handle(const cmd_t &cmd)
             turn_fail("CANCELLED");
         }
         break;
+    case CMD_REPEAT:
+        if (cmd.gen == s_gen.load()) {
+            repeat_begin(cmd.gen);
+        }
+        break;
     case CMD_WAKE:   /* only ends hatch_task's resting wait */
         break;
     }
@@ -2381,6 +2457,45 @@ extern "C" bool muse_hatch_turn_caption(size_t played, char *out, size_t cap)
 extern "C" size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms)
 {
     return xStreamBufferReceive(s_out, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
+}
+
+extern "C" bool muse_hatch_last_reply(char *out, size_t cap)
+{
+    if (!cap) {
+        return false;
+    }
+    out[0] = '\0';
+    if (!s_last_reply[0]) {
+        return false;
+    }
+    strlcpy(out, s_last_reply, cap);
+    return true;
+}
+
+extern "C" bool muse_hatch_repeat_last(void)
+{
+    /* handle() re-checks under the session task; this is the fast refusal. */
+    if (!s_last_reply[0] || !s_connected || s_turn.phase != P_IDLE) {
+        return false;
+    }
+    uint32_t gen = ++s_gen;
+    drain_out();
+    post(CMD_REPEAT, gen);
+    return true;
+}
+
+extern "C" bool muse_hatch_take_reply_image(char *out, size_t cap)
+{
+    if (!cap) {
+        return false;
+    }
+    out[0] = '\0';
+    if (!s_reply_image[0]) {
+        return false;
+    }
+    strlcpy(out, s_reply_image, cap);
+    s_reply_image[0] = '\0';
+    return true;
 }
 
 /* Bench test: decodes the embedded test_reply.mp3 exactly as a reply is decoded. */

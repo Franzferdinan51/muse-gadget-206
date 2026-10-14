@@ -22,7 +22,13 @@
  *              screen pages it (test_muse_caption_wrap.py)
  *   clean      stdin is a reply's text: prints the caption form (markdown
  *              stripped, clipped to 240) then the activity line for stdin
- *              treated as a status code, as "<caption>\n<activity>" */
+ *              treated as a status code, as "<caption>\n<activity>"
+ * CompanionApp ports (test_muse_companion_ports.py):
+ *   repeat S   stdin is the last reply, S the status line ("-" for none):
+ *              prints the "say it again" source, or "(null)"
+ *   imgurl     stdin is a reply's text: prints its first https image URL, or "(null)"
+ *   idavatar   stdin is a GET /identity body: prints its character image URL, or "(null)"
+ *   speakgen   prints a fixed speak-generation claim/is-latest scenario */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,8 +109,43 @@ int main(int argc, char **argv)
         fputc('\n', stdout);
         const char *act = muse_activity_caption(in);
         fputs(act ? act : "(null)", stdout);
+    } else if (argc > 2 && !strcmp(argv[1], "repeat")) {
+        /* stdin is the last reply, argv[2] the status line ("-" for none). */
+        static char out[1 << 16];
+        const char *status = !strcmp(argv[2], "-") ? NULL : argv[2];
+        if (muse_repeat_pick(in, status, out, sizeof(out))) {
+            fputs(out, stdout);
+        } else {
+            fputs("(null)", stdout);
+        }
+    } else if (argc > 1 && !strcmp(argv[1], "imgurl")) {
+        static char out[1 << 16];
+        if (muse_reply_image_url(in, out, sizeof(out))) {
+            fputs(out, stdout);
+        } else {
+            fputs("(null)", stdout);
+        }
+    } else if (argc > 1 && !strcmp(argv[1], "idavatar")) {
+        static char out[1 << 16];
+        if (muse_identity_avatar_url(in, out, sizeof(out))) {
+            fputs(out, stdout);
+        } else {
+            fputs("(null)", stdout);
+        }
+    } else if (argc > 1 && !strcmp(argv[1], "speakgen")) {
+        uint32_t slot = 0;
+        uint32_t g1 = muse_speak_claim(&slot);
+        uint32_t g2 = muse_speak_claim(&slot);
+        printf("g1=%u g2=%u latest1=%d latest2=%d\n", g1, g2, muse_speak_is_latest(&slot, g1),
+               muse_speak_is_latest(&slot, g2));
+        slot = UINT32_MAX;
+        uint32_t g3 = muse_speak_claim(&slot);
+        printf("wrap=%u latest3=%d null=%d zero=%d\n", g3, muse_speak_is_latest(&slot, g3),
+               muse_speak_is_latest(NULL, g3), muse_speak_is_latest(&slot, 0));
+        printf("nullclaim=%u\n", muse_speak_claim(NULL));
     } else {
-        fprintf(stderr, "usage: %s console|unescape|caption COLS|clean < input\n", argv[0]);
+        fprintf(stderr, "usage: %s console|unescape|caption COLS|clean|repeat STATUS|imgurl|idavatar|speakgen < input\n",
+                argv[0]);
         return 2;
     }
     free(in);

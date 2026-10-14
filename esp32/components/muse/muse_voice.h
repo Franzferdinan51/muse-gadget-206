@@ -44,6 +44,16 @@ void muse_voice_request_loopback(void);
 /* Bench test: decodes and plays a built-in MP3 reply. */
 void muse_voice_request_mp3test(void);
 
+/* "Say it again": replays the last reply when idle (a no-op with a
+ * NOTHING TO SAY YET caption when no turn has finished one). */
+void muse_voice_request_repeat(void);
+
+/* Stops the reply being played, if any (tap barge-in stops it too). */
+void muse_voice_request_stop(void);
+
+/* Whether reply audio is playing (the speaking singleton). */
+bool muse_voice_speaking(void);
+
 /* Asleep with nothing to play: codecs off, Wi-Fi dozing. */
 bool muse_voice_resting(void);
 

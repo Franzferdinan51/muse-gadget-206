@@ -94,6 +94,7 @@ typedef enum {
     MUSE_HATCH_EV_DONE,     /* reply complete; the audio stream is drained after this */
     MUSE_HATCH_EV_ERROR,    /* turn failed; text says why */
     MUSE_HATCH_EV_SENT,     /* the VM has acknowledged the note */
+    MUSE_HATCH_EV_BUSY,     /* agent.status activity while thinking (Thinking…, Using a tool…) */
 } muse_hatch_ev_t;
 
 /* Non-blocking; copies the event's text. Events of cancelled turns are dropped. */
@@ -108,6 +109,24 @@ bool muse_hatch_turn_caption(size_t played, char *out, size_t cap);
 
 /* Reply speech as 16 kHz mono. Waits up to wait_ms for some; returns frames read. */
 size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms);
+
+/* Last finished reply in speakable form (at most 500 characters), for
+ * "say it again". False when no turn has finished one yet. */
+bool muse_hatch_last_reply(char *out, size_t cap);
+/* Replays the last reply as a fresh turn: re-spoken with TTS, else shown
+ * at reading pace. False when idle with nothing stored, offline, or busy. */
+bool muse_hatch_repeat_last(void);
+/* First https image URL in the last finished reply, once, for auto-draw. */
+bool muse_hatch_take_reply_image(char *out, size_t cap);
+
+/* Pure CompanionApp text ports (muse_chat_text.c, no backends needed):
+ * "say it again" source picking, reply/identity image URL scans, and
+ * speak-generation counters (only the latest generation clears speech). */
+bool muse_repeat_pick(const char *reply, const char *status, char *out, size_t cap);
+bool muse_reply_image_url(const char *text, char *out, size_t cap);
+bool muse_identity_avatar_url(const char *json, char *out, size_t cap);
+uint32_t muse_speak_claim(uint32_t *slot);
+bool muse_speak_is_latest(const uint32_t *slot, uint32_t gen);
 
 /* Bench test: decodes a built-in MP3 to 16 kHz; caller frees *pcm. Returns frames. */
 size_t muse_hatch_mp3_selftest(int16_t **pcm);

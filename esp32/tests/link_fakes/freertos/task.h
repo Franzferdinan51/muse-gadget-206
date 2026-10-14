@@ -25,6 +25,10 @@ typedef void (*TaskFunction_t)(void *);
 BaseType_t xTaskCreate(TaskFunction_t task, const char *name,
                        unsigned stack_depth, void *params,
                        unsigned priority, TaskHandle_t *out_handle);
+BaseType_t xTaskCreateWithCaps(TaskFunction_t task, const char *name,
+                               unsigned stack_depth, void *params,
+                               unsigned priority, TaskHandle_t *out_handle,
+                               unsigned caps);
 void vTaskDelete(TaskHandle_t task);
 void vTaskDelay(int ticks);
 #else
@@ -43,6 +47,23 @@ static inline BaseType_t xTaskCreate(TaskFunction_t task,
     (void)stack_depth;
     (void)params;
     (void)priority;
+    if (out_handle) *out_handle = (TaskHandle_t)1;
+    return pdPASS;
+}
+
+static inline BaseType_t xTaskCreateWithCaps(TaskFunction_t task,
+                                             const char *name,
+                                             unsigned stack_depth,
+                                             void *params,
+                                             unsigned priority,
+                                             TaskHandle_t *out_handle,
+                                             unsigned caps) {
+    (void)task;
+    (void)name;
+    (void)stack_depth;
+    (void)params;
+    (void)priority;
+    (void)caps;
     if (out_handle) *out_handle = (TaskHandle_t)1;
     return pdPASS;
 }

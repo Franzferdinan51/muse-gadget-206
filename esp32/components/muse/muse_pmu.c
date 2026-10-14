@@ -161,10 +161,17 @@ esp_err_t muse_pmu_read_power(muse_power_t *out)
     out->charging = battery && ((s2 >> 5) & 0x3) == 0x1;
     out->battery_pct = -1;
     out->battery_mv = 0;
-    if (battery && rd(REG_BAT_PERCENT, &pct) == ESP_OK && pct <= 100) {
+    if (battery) {
+        /* A failed gauge must fail the sample: reporting -1/0 as data
+         * corrupts the drain measurement and the battery icon. The next
+         * poll retries; without a battery there is nothing to read. */
+        if (rd(REG_BAT_PERCENT, &pct) != ESP_OK || pct > 100) {
+            return ESP_FAIL;
+        }
+        if (rd(REG_VBAT_H, &hi) != ESP_OK || rd(REG_VBAT_L, &lo) != ESP_OK) {
+            return ESP_FAIL;
+        }
         out->battery_pct = pct;
-    }
-    if (battery && rd(REG_VBAT_H, &hi) == ESP_OK && rd(REG_VBAT_L, &lo) == ESP_OK) {
         out->battery_mv = (hi & 0x1F) << 8 | lo;
     }
     return ESP_OK;

@@ -214,3 +214,15 @@ bool config_clear_setup_complete(void) {
     const char *keys[] = {SETUP_COMPLETE_KEY};
     return clear_and_verify(keys, sizeof(keys) / sizeof(keys[0]));
 }
+
+static const char *INTRO_SENT_KEY = "muse_intro_sent";
+
+bool config_intro_sent(void) {
+    char value[2] = {0};
+    return config_get_str(INTRO_SENT_KEY, value, sizeof(value))
+           && value[0] == '1';
+}
+
+bool config_mark_intro_sent(void) {
+    return config_set_str(INTRO_SENT_KEY, "1");
+}

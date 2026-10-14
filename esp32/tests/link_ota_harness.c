@@ -61,6 +61,17 @@ BaseType_t xTaskCreate(TaskFunction_t task, const char *name,
     return pdPASS;
 }
 
+BaseType_t xTaskCreateWithCaps(TaskFunction_t task, const char *name,
+                               unsigned stack_depth, void *params,
+                               unsigned priority, TaskHandle_t *out_handle,
+                               unsigned caps) {
+    (void)name; (void)stack_depth; (void)priority; (void)out_handle; (void)caps;
+    assert(!pending_task);
+    pending_task = task;
+    pending_arg = params;
+    return pdPASS;
+}
+
 void vTaskDelete(TaskHandle_t task) { (void)task; }
 void vTaskDelay(int ticks) { (void)ticks; }
 void esp_restart(void) { reboots++; }

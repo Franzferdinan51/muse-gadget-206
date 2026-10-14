@@ -602,7 +602,7 @@ static const muse_board_t s_board = {
     .talk_hint = { LV_ALIGN_CENTER, 0, 192 },
     /* Top-right corner: at centre-top the power glyph sat on top of
      * the state word and the gadget name (owner flagged the overlap). */
-    .aux_hint = { LV_ALIGN_TOP_RIGHT, -34, 30 },   /* inside the bezel corner curve (safe top 30) */
+    .aux_hint = { LV_ALIGN_TOP_RIGHT, -40, 36 },   /* bezel nips glyphs nearer the glass edge */
     .frame_ms = 40,
     .init = init,
     .display_start = display_start,

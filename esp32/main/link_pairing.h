@@ -37,6 +37,10 @@ const char *link_pairing_decrypt_command(cJSON *root, char **plaintext_json);
 // Successful confirmation transitions return an opaque nonzero session token.
 uint32_t link_pairing_handle_client_finished(void);
 bool link_pairing_confirmation_required(void);
+// Wizard step for a pairing screen (pairing_screen.dart pairingStepIndex):
+// 0 waiting, 1 handshake, 2 confirm, 3 verifying, 4 done.
+int link_pairing_wizard_step(bool paired);
+const char *link_pairing_wizard_text(int step);
 // Arm physical input only after the encrypted prompt has been emitted.
 bool link_pairing_arm_confirmation(uint32_t generation);
 uint32_t link_pairing_confirm_active_session(void);

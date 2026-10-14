@@ -67,6 +67,12 @@ typedef void (*noise_ctrl_agent_name_cb)(const char *name);
 
 void noise_ctrl_set_agent_name_cb(noise_ctrl_agent_name_cb cb);
 
+// Called from the session task with the agent's portrait URL from the same
+// GET /identity, when it carries one. The callback must copy what it keeps.
+typedef void (*noise_ctrl_agent_avatar_cb)(const char *url);
+
+void noise_ctrl_set_agent_avatar_cb(noise_ctrl_agent_avatar_cb cb);
+
 // Override the Noise host. NULL or empty restores the compiled default.
 void noise_ctrl_set_host(const char *host);
 

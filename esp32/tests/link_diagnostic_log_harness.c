@@ -377,6 +377,40 @@ static void test_clear_discards_in_flight_capture(void) {
     diagnostic_log_snapshot_free(&snapshot);
 }
 
+static void test_tail_lines_returns_last_complete_lines(void) {
+    diagnostic_log_clear();
+    for (int i = 1; i <= 5; i++) {
+        emit_log("I (%d) link.app: line %d\n", i, i);
+    }
+    char tail[256];
+    size_t n = diagnostic_log_tail_lines(3, tail, sizeof(tail));
+    CHECK(n == 3, "expected 3 tail lines, got %zu", n);
+    CHECK(strcmp(tail, "I (3) link.app: line 3\n"
+                       "I (4) link.app: line 4\n"
+                       "I (5) link.app: line 5\n") == 0,
+          "tail mismatch: %s", tail);
+
+    // Asking for more than there is returns everything.
+    n = diagnostic_log_tail_lines(30, tail, sizeof(tail));
+    CHECK(n == 5, "expected 5 tail lines, got %zu", n);
+
+    // A small buffer drops oldest lines first, never splitting one.
+    char small[48];
+    n = diagnostic_log_tail_lines(30, small, sizeof(small));
+    CHECK(n == 2, "expected 2 tail lines, got %zu", n);
+    CHECK(strcmp(small, "I (4) link.app: line 4\n"
+                        "I (5) link.app: line 5\n") == 0,
+          "truncated tail mismatch: %s", small);
+
+    // Empty input and empty history are safe no-ops.
+    CHECK(diagnostic_log_tail_lines(0, tail, sizeof(tail)) == 0,
+          "zero lines must copy nothing");
+    CHECK(tail[0] == '\0', "zero lines must still terminate");
+    diagnostic_log_clear();
+    CHECK(diagnostic_log_tail_lines(30, tail, sizeof(tail)) == 0,
+          "empty history must copy nothing");
+}
+
 int main(void) {
     test_init_failures_and_install_once();
     test_console_tee_and_normalized_capture();
@@ -384,5 +418,6 @@ int main(void) {
     test_whole_line_wrap_and_long_line_marker();
     test_clear_resets_history_and_keeps_capture_active();
     test_clear_discards_in_flight_capture();
+    test_tail_lines_returns_last_complete_lines();
     return 0;
 }

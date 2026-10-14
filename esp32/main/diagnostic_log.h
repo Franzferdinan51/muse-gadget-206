@@ -50,6 +50,11 @@ void diagnostic_log_clear(void);
 bool diagnostic_log_snapshot(diagnostic_log_snapshot_t *snapshot);
 void diagnostic_log_snapshot_free(diagnostic_log_snapshot_t *snapshot);
 
+// Last `max_lines` complete lines into `out`, for the on-device diagnostics
+// screen (the phone shows a 300-line tail; the gadget keeps ~30 for RAM and
+// LVGL). Returns the lines copied; `out` is always NUL-terminated.
+size_t diagnostic_log_tail_lines(size_t max_lines, char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif
