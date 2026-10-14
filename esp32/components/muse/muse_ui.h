@@ -54,6 +54,15 @@ void muse_ui_preview_brightness(int pct);
 bool muse_ui_image_size(int *w, int *h);
 bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels);
 void muse_ui_image_hide(void);
+/*
+ * Animated GIF avatar from display.draw_url / avatar.set, from any task.
+ * On true, takes ownership of `data` (a PSRAM buffer holding the whole
+ * GIF file); the UI frees it when the GIF is hidden or replaced. On
+ * false the caller keeps ownership. Loops until a tap, a talk, the menu
+ * or muse_ui_image_hide(). False without PSRAM, before the UI is up, or
+ * when the LVGL GIF decoder is not compiled in.
+ */
+bool muse_ui_gif_show(uint8_t *data, size_t len);
 /* Watcher camera mode: shows an on-screen shutter hint over the live image. */
 void muse_ui_camera_hint(bool visible);
 

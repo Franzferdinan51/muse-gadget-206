@@ -32,6 +32,7 @@
 #include "muse_audio.h"
 #include "muse_board.h"
 #include "muse_chat.h"
+#include "muse_chat_priv.h"
 #include "muse_input.h"
 #include "muse_mem.h"
 #include "muse_settings.h"
@@ -376,7 +377,10 @@ static bool hatch_reply(bool *delivered)
                 /* Once speech starts, the caption follows it. The event only
                  * has room for the page's start; the page itself comes below. */
                 if (!speaking && !muse_hatch_turn_caption(played, page, sizeof(page))) {
-                    muse_state_set_caption("%s", text);
+                    /* Strip markdown so `**bold**` and links don't reach the screen. */
+                    char clean[sizeof(text)];
+                    muse_caption_from_reply(text, clean, sizeof(clean));
+                    muse_state_set_caption("%s", clean);
                 }
                 break;
             case MUSE_HATCH_EV_DONE:

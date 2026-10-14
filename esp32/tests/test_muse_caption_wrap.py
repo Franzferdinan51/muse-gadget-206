@@ -113,6 +113,41 @@ class CaptionWrapTest(unittest.TestCase):
     def test_mixed_text_breaks_at_spaces_or_between_cjk(self) -> None:
         self.assertEqual(self.wrap("Muse 说 hello world", 8), ["Muse 说", "hello", "world"])
 
+    def clean(self, text: str) -> tuple[str, str]:
+        proc = subprocess.run(
+            [str(self.binary), "clean"],
+            input=text.encode(),
+            capture_output=True,
+            check=True,
+        )
+        caption, _, activity = proc.stdout.decode().partition("\n")
+        return caption, activity
+
+    def test_reply_markdown_is_stripped(self) -> None:
+        caption, _ = self.clean("**Bold** and a [link](http://x) plus `code`")
+        self.assertEqual(caption, "Bold and a link plus code")
+
+    def test_reply_code_fences_become_a_space(self) -> None:
+        caption, _ = self.clean("try ```x = 1``` now")
+        self.assertEqual(caption, "try now")
+
+    def test_reply_whitespace_collapses(self) -> None:
+        caption, _ = self.clean("a  lot\n\tof   space")
+        self.assertEqual(caption, "a lot of space")
+
+    def test_reply_clips_at_240_with_ellipsis(self) -> None:
+        caption, _ = self.clean("word " * 100)
+        self.assertTrue(caption.endswith("…"), caption)
+        self.assertLessEqual(len(caption.encode()), 240)
+
+    def test_activity_codes_map_to_labels(self) -> None:
+        _, activity = self.clean("thinking")
+        self.assertEqual(activity, "Thinking…")
+        _, activity = self.clean("USING_TOOL")
+        self.assertEqual(activity, "Using a tool…")
+        _, activity = self.clean("  ")
+        self.assertEqual(activity, "(null)")
+
 
 if __name__ == "__main__":
     unittest.main()

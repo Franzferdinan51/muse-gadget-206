@@ -183,6 +183,183 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap)
     return true;
 }
 
+/* ---- Reply captions (ported from the CompanionApp captions.dart) ---- */
+
+/* Strips markdown: fenced code blocks become a space, links keep their
+ * text, and [*_~`#>-] runs go. Collapses whitespace runs to one space. */
+static size_t clean_reply(const char *text, char *out, size_t cap)
+{
+    size_t o = 0;
+    bool space = true;   /* collapse leading whitespace too */
+    const char *p = text;
+    while (*p && o + 1 < cap) {
+        if (!strncmp(p, "```", 3)) {
+            const char *end = strstr(p + 3, "```");
+            p = end ? end + 3 : p + strlen(p);
+            if (!space && o + 1 < cap) {
+                out[o++] = ' ';
+                space = true;
+            }
+            continue;
+        }
+        if (*p == '[') {
+            const char *mid = strchr(p, ']');
+            const char *open = mid ? strchr(mid, '(') : NULL;
+            const char *close = open ? strchr(open, ')') : NULL;
+            if (mid && open && close && open == mid + 1) {
+                p++;   /* emit the link text, skip the URL below */
+                while (p < mid && o + 1 < cap) {
+                    out[o++] = *p++;
+                    space = false;
+                }
+                p = close + 1;
+                continue;
+            }
+        }
+        if (*p == '*' || *p == '_' || *p == '~' || *p == '`' || *p == '#' || *p == '>') {
+            while (*p == '*' || *p == '_' || *p == '~' || *p == '`' || *p == '#' || *p == '>') {
+                p++;
+            }
+            continue;
+        }
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            if (!space && o + 1 < cap) {
+                out[o++] = ' ';
+                space = true;
+            }
+            p++;
+            continue;
+        }
+        /* Whole UTF-8 characters, so a clip never splits one. */
+        size_t n = 1;
+        while (n < 4 && (p[n] & 0xC0) == 0x80) {
+            n++;
+        }
+        if (o + n >= cap) {
+            break;
+        }
+        memcpy(out + o, p, n);
+        o += n;
+        p += n;
+        space = false;
+    }
+    while (o && out[o - 1] == ' ') {
+        o--;
+    }
+    out[o] = '\0';
+    return o;
+}
+
+/* Clips to `limit` bytes with a UTF-8 ellipsis, like _clip in captions.dart. */
+static void clip_ellipsis(char *out, size_t cap, size_t limit)
+{
+    size_t len = strlen(out);
+    if (len <= limit) {
+        return;
+    }
+    size_t at = limit > 3 ? limit - 3 : 0;
+    while (at && (out[at] & 0xC0) == 0x80) {
+        at--;
+    }
+    while (at && out[at - 1] == ' ') {
+        at--;
+    }
+    if (at + 3 < cap) {
+        memcpy(out + at, "\xE2\x80\xA6", 3);
+        out[at + 3] = '\0';
+    } else {
+        out[at] = '\0';
+    }
+}
+
+void muse_caption_from_reply(const char *text, char *out, size_t cap)
+{
+    if (!cap) {
+        return;
+    }
+    out[0] = '\0';
+    if (!text) {
+        return;
+    }
+    clean_reply(text, out, cap);
+    clip_ellipsis(out, cap, MUSE_CAPTION_LIMIT);
+}
+
+void muse_speakable_reply(const char *text, char *out, size_t cap)
+{
+    if (!cap) {
+        return;
+    }
+    out[0] = '\0';
+    if (!text) {
+        return;
+    }
+    clean_reply(text, out, cap);
+    clip_ellipsis(out, cap, MUSE_SPEAKABLE_LIMIT);
+}
+
+const char *muse_activity_caption(const char *code)
+{
+    static char generic[48];
+    if (!code) {
+        return NULL;
+    }
+    while (*code == ' ' || *code == '\t') {
+        code++;
+    }
+    char key[32];
+    size_t i = 0;
+    for (const char *p = code; *p && i + 1 < sizeof(key); p++) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') {
+            c += 'a' - 'A';
+        } else if (c == ' ') {
+            c = '_';
+        }
+        key[i++] = c;
+    }
+    while (i && (key[i - 1] == '_' || key[i - 1] == '\t')) {
+        i--;
+    }
+    key[i] = '\0';
+    if (!key[0]) {
+        return NULL;
+    }
+    static const struct {
+        const char *code;
+        const char *label;
+    } known[] = {
+        { "thinking", "Thinking…" },
+        { "working", "Working…" },
+        { "searching", "Searching…" },
+        { "reading", "Reading…" },
+        { "writing", "Writing…" },
+        { "listening", "Listening…" },
+        { "speaking", "Speaking…" },
+        { "browsing", "Looking something up…" },
+        { "using_tool", "Using a tool…" },
+        { "tool", "Using a tool…" },
+        { "waiting", "Waiting…" },
+    };
+    for (size_t k = 0; k < sizeof(known) / sizeof(known[0]); k++) {
+        if (!strcmp(key, known[k].code)) {
+            return known[k].label;
+        }
+    }
+    size_t o = 0;
+    bool word = true;
+    for (size_t k = 0; key[k] && o + 1 < sizeof(generic); k++) {
+        char c = key[k] == '_' ? ' ' : key[k];
+        if (word && c >= 'a' && c <= 'z') {
+            c -= 'a' - 'A';
+        }
+        word = (c == ' ');
+        generic[o++] = c;
+    }
+    generic[o] = '\0';
+    return o ? generic : NULL;
+}
+
 /* ---- Typed turns on the serial console ---- */
 
 /* JSON-escapes whole characters of *src into out, up to cap - 1 bytes; moves *src past them. */

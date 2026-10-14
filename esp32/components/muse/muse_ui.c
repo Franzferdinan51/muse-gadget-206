@@ -123,6 +123,11 @@ static lv_obj_t *s_image;   /* display.draw_url, over the face */
 #if CONFIG_MUSE_WATCHER_CAMERA
 static lv_obj_t *s_camera_hint;
 #endif
+#if CONFIG_LV_USE_GIF
+static lv_obj_t *s_gif;             /* animated GIF avatar, over the face */
+static lv_image_dsc_t s_gif_dsc;    /* points at s_gif_data while shown */
+static uint8_t *s_gif_data;         /* owned PSRAM: the whole GIF file */
+#endif
 static lv_image_dsc_t s_image_dsc;  /* its data is set once the image is shown */
 /* The download writes the pixels without the display lock, so a big JPEG isn't
  * held up by each frame; this guards the buffer and what changed in it. */
@@ -1020,6 +1025,14 @@ static void image_hide_locked(void)
         s_image_dsc.data = NULL;
         s_image_dirty = false;
     }
+#if CONFIG_LV_USE_GIF
+    if (s_gif_data) {
+        lv_obj_add_flag(s_gif, LV_OBJ_FLAG_HIDDEN);
+        heap_caps_free(s_gif_data);
+        s_gif_data = NULL;
+        s_gif_dsc.data = NULL;
+    }
+#endif
     xSemaphoreGive(s_image_mutex);
 }
 
@@ -1096,6 +1109,14 @@ static void build_overlays(void)
     lv_obj_set_pos(s_image, 0, 0);
     lv_obj_add_flag(s_image, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_image, on_image_clicked, LV_EVENT_CLICKED, NULL);
+#if CONFIG_LV_USE_GIF
+    /* Animated GIF avatar: same overlay slot, looping via its own timer. */
+    s_gif = lv_gif_create(scr);
+    lv_gif_set_color_format(s_gif, LV_COLOR_FORMAT_RGB565);
+    lv_obj_center(s_gif);
+    lv_obj_add_flag(s_gif, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_gif, on_image_clicked, LV_EVENT_CLICKED, NULL);
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
     s_camera_hint = lv_btn_create(scr);
     lv_obj_set_size(s_camera_hint, 244, 46);
@@ -1649,7 +1670,11 @@ static void frame_tick(lv_timer_t *timer)
         muse_ui_frame_stage = 9;
         return;   /* the menu covers the face */
     }
-    if (s_image_dsc.data) {
+    if (s_image_dsc.data
+#if CONFIG_LV_USE_GIF
+        || s_gif_dsc.data
+#endif
+    ) {
         return;   /* the image covers the face */
     }
     if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
@@ -1945,6 +1970,38 @@ void muse_ui_image_hide(void)
     if (s_camera_hint) lv_obj_add_flag(s_camera_hint, LV_OBJ_FLAG_HIDDEN);
 #endif
     muse_board->display_unlock();
+}
+
+bool muse_ui_gif_show(uint8_t *data, size_t len)
+{
+#if !CONFIG_LV_USE_GIF
+    (void)data;
+    (void)len;
+    return false;
+#else
+    if (!data || !len) {
+        return false;
+    }
+    if (!s_ready || !heap_caps_get_total_size(MALLOC_CAP_SPIRAM)) {
+        return false;
+    }
+    muse_board->display_lock(-1);
+    image_hide_locked();   /* clears any still image or previous GIF */
+    xSemaphoreTake(s_image_mutex, portMAX_DELAY);
+    s_gif_data = data;
+    s_gif_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_gif_dsc.header.cf = LV_COLOR_FORMAT_RAW;
+    s_gif_dsc.header.flags = 0;
+    s_gif_dsc.data_size = len;
+    s_gif_dsc.data = data;
+    muse_menu_close();
+    lv_gif_set_src(s_gif, &s_gif_dsc);
+    lv_obj_remove_flag(s_gif, LV_OBJ_FLAG_HIDDEN);
+    muse_state_set_asleep(false);
+    xSemaphoreGive(s_image_mutex);
+    muse_board->display_unlock();
+    return true;
+#endif
 }
 
 #if CONFIG_MUSE_WATCHER_CAMERA

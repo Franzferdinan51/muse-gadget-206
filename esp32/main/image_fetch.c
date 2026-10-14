@@ -35,6 +35,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rom/tjpgd.h"
+#if CONFIG_HOMEHUB_LED_BACKEND_MUSE
+#include "muse_ui.h"
+#endif
 
 static const char *TAG = "link.image";
 
@@ -73,6 +76,9 @@ static const char *TAG = "link.image";
 #define JPEG_POOL_BYTES     3100
 // Largest block the decoder emits: a 16x16 MCU.
 #define JPEG_MCU_PIXELS     (16 * 16)
+// GIF sniff length ("GIF87a"/"GIF89a") and largest GIF kept for the animator.
+#define GIF_MAGIC_LEN       6
+#define GIF_MAX_BYTES       (384 * 1024)
 
 typedef struct {
     char *url;
@@ -86,9 +92,10 @@ typedef struct {
     // fetch must not continue in cleartext.
     bool https;
     int64_t deadline_us;
-    // Two bytes read to sniff the format, handed back to the first read.
-    uint8_t peek[2];
+    // Sniff bytes read to detect the format, handed back to the first read.
+    uint8_t peek[GIF_MAGIC_LEN];
     size_t peek_len;
+    size_t peek_off;
     size_t bytes;
     bool eof;
     bool low_memory;
@@ -150,8 +157,7 @@ static bool within_deadline(fetch_t *f) {
 static int fetch_read(fetch_t *f, uint8_t *buf, size_t len) {
     size_t have = 0;
     while (have < len && f->peek_len) {
-        buf[have++] = f->peek[0];
-        f->peek[0] = f->peek[1];
+        buf[have++] = f->peek[f->peek_off++];
         f->peek_len--;
     }
     while (have < len && !f->eof) {
@@ -161,7 +167,12 @@ static int fetch_read(fetch_t *f, uint8_t *buf, size_t len) {
         }
         if (!within_deadline(f)) return -1;
         int n = esp_http_client_read(f->http, (char *)buf + have, (int)(len - have));
-        if (n < 0) return -1;
+        if (n < 0) {
+            /* A read that outlives the deadline reports as a timeout, not
+             * a generic failure, so the caller names it correctly. */
+            if (esp_timer_get_time() >= f->deadline_us) f->timed_out = true;
+            return -1;
+        }
         if (n == 0) {
             if (esp_http_client_is_complete_data_received(f->http)) f->eof = true;
             else return -1;
@@ -205,6 +216,78 @@ static const char *draw_raw(fetch_t *f, int *rows_drawn) {
     free(buf);
     *rows_drawn = y - TOP_ROW(f);
     return err;
+}
+
+// ---- GIF ---------------------------------------------------------------------
+
+static bool is_gif_magic(const uint8_t *p, size_t n) {
+    if (n < GIF_MAGIC_LEN) return false;
+    return memcmp(p, "GIF87a", GIF_MAGIC_LEN) == 0
+        || memcmp(p, "GIF89a", GIF_MAGIC_LEN) == 0;
+}
+
+// Animated GIF: download the whole file into PSRAM and hand it to the
+// LVGL gif widget, which loops it. Only the full UI can animate; LED
+// backends get a clean error instead of raw-pixel garbage.
+static const char *draw_gif(fetch_t *f, int *out_w, int *out_h) {
+#if !CONFIG_HOMEHUB_LED_BACKEND_MUSE
+    (void)f;
+    (void)out_w;
+    (void)out_h;
+    return "animated GIF needs the full UI";
+#else
+    if (!heap_caps_get_total_size(MALLOC_CAP_SPIRAM)) {
+        return "animated GIF needs PSRAM";
+    }
+    size_t cap = 32 * 1024, len = 0;
+    uint8_t *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!buf) return "out of memory";
+    const char *err = NULL;
+    for (;;) {
+        if (len == cap) {
+            if (cap >= GIF_MAX_BYTES) {
+                err = "GIF is too large";
+                break;
+            }
+            size_t next = cap * 2;
+            if (next > GIF_MAX_BYTES) next = GIF_MAX_BYTES;
+            uint8_t *bigger = heap_caps_realloc(buf, next, MALLOC_CAP_SPIRAM);
+            if (!bigger) {
+                err = "out of memory";
+                break;
+            }
+            buf = bigger;
+            cap = next;
+        }
+        int n = fetch_read(f, buf + len, cap - len > 4096 ? 4096 : cap - len);
+        if (n < 0) {
+            err = f->low_memory ? "memory ran low" : "download failed";
+            break;
+        }
+        if (n == 0) break;
+        len += (size_t)n;
+    }
+    if (!err) {
+        if (len < 10) {
+            err = "not a valid GIF";
+        } else {
+            // Logical screen size from the GIF header (little-endian).
+            int w = buf[6] | (buf[7] << 8);
+            int h = buf[8] | (buf[9] << 8);
+            if (w <= 0 || h <= 0 || w > f->width || h > f->height) {
+                err = "GIF dimensions exceed the screen";
+            } else {
+                *out_w = w;
+                *out_h = h;
+            }
+        }
+    }
+    if (err || !muse_ui_gif_show(buf, len)) {
+        heap_caps_free(buf);
+        return err ? err : "could not show the GIF";
+    }
+    return NULL;
+#endif
 }
 
 // ---- JPEG --------------------------------------------------------------------
@@ -353,10 +436,15 @@ static void fetch_task(void *arg) {
     } else {
         int n = fetch_read(f, f->peek, sizeof(f->peek));
         f->peek_len = n > 0 ? (size_t)n : 0;
+        f->peek_off = 0;
         const char *fail;
-        if (f->peek_len == 2 && f->peek[0] == 0xFF && f->peek[1] == 0xD8) {
+        if (f->peek_len >= 2 && f->peek[0] == 0xFF && f->peek[1] == 0xD8) {
             result.format = "jpeg";
             fail = draw_jpeg(f, &result.width, &result.height, &result.scale);
+        } else if (is_gif_magic(f->peek, f->peek_len)) {
+            result.format = "gif";
+            fail = draw_gif(f, &result.width, &result.height);
+            result.scale = 1;
         } else {
             int rows = 0;
             result.format = "rgb565";

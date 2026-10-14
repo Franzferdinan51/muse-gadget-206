@@ -1621,7 +1621,10 @@ static void tts_kick(int msg_idx)
     tts_job_t job;
     s_tts_gen = s_tts_gen + 1;
     job.gen = s_tts_gen;
-    const char *src = s_turn.texts + msg_idx * TEXT_MAX;
+    /* Strip markdown so the voice doesn't read "**bold**" and URLs aloud. */
+    static char clean[TTS_TEXT_MAX + 1];
+    muse_speakable_reply(s_turn.texts + msg_idx * TEXT_MAX, clean, sizeof(clean));
+    const char *src = clean;
     size_t n = strlen(src);
     if (n > TTS_TEXT_MAX) {
         n = TTS_TEXT_MAX;

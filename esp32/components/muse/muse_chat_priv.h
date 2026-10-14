@@ -56,6 +56,16 @@ size_t muse_hatch_base64(const uint8_t *in, size_t n, char *out);
 void muse_hatch_tail_words(const char *src, char *out, size_t cap);
 bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
 
+/* Reply captions (muse_chat_text.c, ported from the CompanionApp): the
+ * reply with markdown stripped and whitespace collapsed, clipped with an
+ * ellipsis. 240 characters under the character, 500 for speech. */
+#define MUSE_CAPTION_LIMIT 240
+#define MUSE_SPEAKABLE_LIMIT 500
+void muse_caption_from_reply(const char *text, char *out, size_t cap);
+void muse_speakable_reply(const char *text, char *out, size_t cap);
+/* Short line for an agent.status activity code, or NULL when it is empty. */
+const char *muse_activity_caption(const char *code);
+
 #ifdef __cplusplus
 }
 #endif
