@@ -66,7 +66,7 @@ typedef void (*text_done_cb_t)(const char *text);
 static int s_text_scale = 466;
 static lv_obj_t *s_tile;
 static lv_obj_t *s_current;
-static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text, *s_update;
+static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_display, *s_sleep, *s_battery, *s_power, *s_text, *s_update;
 
 /*
  * Only home is kept. A sub-page is built when it opens and deleted on the way
@@ -79,7 +79,7 @@ typedef struct {
 } page_t;
 
 /* Home values. */
-static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_home_update, *s_about;
+static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_display, *s_home_sleep, *s_home_battery, *s_home_update, *s_about;
 
 /* Wi-Fi page. */
 static lv_obj_t *s_wifi_sw, *s_wifi_status, *s_wifi_saved, *s_wifi_scan_btn, *s_wifi_scan_lbl, *s_wifi_list;
@@ -364,7 +364,7 @@ static lv_obj_t *info_row(lv_obj_t *list, const char *text)
 
 static void drop(lv_obj_t *p)
 {
-    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text };
+    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_display, &s_sleep, &s_battery, &s_power, &s_text };
     for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
         if (*pages[i] == p) {
             *pages[i] = NULL;
@@ -998,6 +998,21 @@ static void tick_ble(void)
     }
 }
 
+/* Brightness + value-label helpers live in the Sound section below;
+ * the Display page sits above them, so declare them here. */
+static void on_bright(lv_event_t *e);
+static void set_val(lv_obj_t *l, const char *fmt, int v);
+
+/* ---------- Display ---------- */
+
+static void build_display_page(lv_obj_t *tile)
+{
+    lv_obj_t *list;
+    s_display = page(tile, "DISPLAY", true, &list);
+    s_bright_sl = slider(list, "Brightness", 10, 100, muse_settings_brightness(), &s_bright_val, on_bright);
+    set_val(s_bright_val, "%d%%", muse_settings_brightness());
+}
+
 /* ---------- Sound ---------- */
 
 static void set_val(lv_obj_t *l, const char *fmt, int v)
@@ -1023,6 +1038,9 @@ static void on_volume(lv_event_t *e)
         muse_audio_set_volume(v);
     }
 }
+
+static void on_bright(lv_event_t *e);
+static void set_val(lv_obj_t *l, const char *fmt, int v);
 
 static void on_test_sound(lv_event_t *e)
 {
@@ -1077,8 +1095,6 @@ static void build_sound_page(lv_obj_t *tile)
     lv_obj_set_style_bg_color(s_mic_bar, lv_color_hex(MUSE_RING_TRACK), LV_PART_MAIN);
     lv_obj_set_style_anim_duration(s_mic_bar, 80, 0);
     note(list, "Talk at arm's length: the bar should reach green (-30 to -15 dBFS) without going orange.");
-
-    s_bright_sl = slider(list, "Brightness", 10, 100, muse_settings_brightness(), &s_bright_val, on_bright);
 
     set_val(s_vol_val, "%d%%", muse_settings_volume());
     set_val(s_gain_val, "%d dB", muse_settings_mic_gain() / 3 * 3);
@@ -1314,6 +1330,7 @@ static const page_t WIFI = { &s_wifi, build_wifi_page };
 static const page_t HATCH = { &s_hatch, build_hatch_page };
 static const page_t BLE = { &s_ble, build_ble_page };
 static const page_t SOUND = { &s_sound, build_sound_page };
+static const page_t DISPLAY = { &s_display, build_display_page };
 static const page_t SLEEP = { &s_sleep, build_sleep_page };
 static const page_t BATTERY = { &s_battery, build_battery_page };
 static const page_t POWER = { &s_power, build_power_page };
@@ -1327,6 +1344,7 @@ static void build_home(lv_obj_t *tile)
     row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
     row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
     row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
+    row(list, LV_SYMBOL_EYE_OPEN, "Display", &s_home_display, on_nav, (void *)&DISPLAY);
     row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
     row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
     row(list, LV_SYMBOL_DOWNLOAD, "Software update", &s_home_update, on_nav, (void *)&UPDATE);
@@ -1354,6 +1372,7 @@ static void tick_home(void)
     } else {
         set_text(s_home_sound, "Muted");
     }
+    set_val(s_home_display, "%d%%", muse_settings_brightness());
     set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
 
     muse_power_t p = muse_state_power();
