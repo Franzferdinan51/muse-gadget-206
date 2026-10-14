@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <new>
 
 #include "esp_attr.h"
@@ -1640,30 +1641,98 @@ static void tts_task(void *)
         int status = -1;
         cJSON *root = cJSON_CreateObject();
         if (root) {
-            cJSON_AddStringToObject(root, "model", CONFIG_MUSE_TTS_MODEL);
+            const int engine = muse_settings_tts_model();
+            const bool local = engine != MUSE_TTS_MODEL_FREE;
+            cJSON_AddStringToObject(root, "model",
+                    engine == MUSE_TTS_MODEL_DRAMA3 ? "drama-3" :
+                    engine == MUSE_TTS_MODEL_QWEN3 ? "qwen3-tts" :
+                    CONFIG_MUSE_TTS_MODEL);
             cJSON_AddStringToObject(root, "input", job->text);
             cJSON_AddStringToObject(root, "response_format", "mp3");
-            if (CONFIG_MUSE_TTS_VOICE[0]) {
+            char voice_id[MUSE_TTS_VOICE_MAX + 1];
+            muse_settings_tts_voice_id(voice_id);
+            int vsel = muse_settings_tts_voice_mode();
+            const muse_tts_voice_t *vent = muse_settings_tts_voice_at(vsel);
+            if (vsel == MUSE_TTS_VOICE_CUSTOM && voice_id[0]) {
+                cJSON_AddStringToObject(root, "voice", voice_id);
+            } else if (vent && vent->fish_id[0]) {
+                cJSON_AddStringToObject(root, "voice", vent->fish_id);
+            } else if (CONFIG_MUSE_TTS_VOICE[0]) {
                 cJSON_AddStringToObject(root, "voice", CONFIG_MUSE_TTS_VOICE);
             }
             char *body = cJSON_PrintUnformatted(root);
             cJSON_Delete(root);
             if (body) {
+                char base[128];
+                if (local) {
+                    muse_settings_tts_local_url(base);
+                    if (!base[0]) { snprintf(base, sizeof(base), "http://192.168.1.96:8799"); }
+                } else {
+                    snprintf(base, sizeof(base), "%s", CONFIG_MUSE_TTS_BASE);
+                }
                 char url[192];
-                snprintf(url, sizeof(url), "%s/v1/audio/speech", CONFIG_MUSE_TTS_BASE);
+                snprintf(url, sizeof(url), "%s/v1/audio/speech", base);
                 char auth[192];
                 snprintf(auth, sizeof(auth), "Bearer %s", tts_key());
+                // Cert verification fails while the clock is still at the
+                // epoch; SNTP starts at Wi-Fi connect, so just wait for it.
+                for (int i = 0; i < 40; i++) {
+                    time_t now = time(nullptr);
+                    struct tm tmv;
+                    gmtime_r(&now, &tmv);
+                    if (tmv.tm_year >= (2025 - 1900)) break;
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                }
                 tts_http_ctx_t ctx = { job->gen };
+/* Pinned trust anchors for the TTS endpoint (fw 1.7.33): the esp
+ * x509 bundle lookup fails on OpenRouter's cross-signed GTS chain
+ * ("No matching trusted root certificate found"), so the speech
+ * fetch pins the two roots that chain can terminate at. */
+static const char kTtsCaPem[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+    "VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+    "A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+    "WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+    "IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+    "AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+    "QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+    "HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+    "BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+    "9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+    "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+    "-----END CERTIFICATE-----\n"
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDdTCCAl2gAwIBAgILBAAAAAABFUtaw5QwDQYJKoZIhvcNAQEFBQAwVzELMAkG\n"
+    "A1UEBhMCQkUxGTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExEDAOBgNVBAsTB1Jv\n"
+    "b3QgQ0ExGzAZBgNVBAMTEkdsb2JhbFNpZ24gUm9vdCBDQTAeFw05ODA5MDExMjAw\n"
+    "MDBaFw0yODAxMjgxMjAwMDBaMFcxCzAJBgNVBAYTAkJFMRkwFwYDVQQKExBHbG9i\n"
+    "YWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYDVQQDExJHbG9iYWxT\n"
+    "aWduIFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDaDuaZ\n"
+    "jc6j40+Kfvvxi4Mla+pIH/EqsLmVEQS98GPR4mdmzxzdzxtIK+6NiY6arymAZavp\n"
+    "xy0Sy6scTHAHoT0KMM0VjU/43dSMUBUc71DuxC73/OlS8pF94G3VNTCOXkNz8kHp\n"
+    "1Wrjsok6Vjk4bwY8iGlbKk3Fp1S4bInMm/k8yuX9ifUSPJJ4ltbcdG6TRGHRjcdG\n"
+    "snUOhugZitVtbNV4FpWi6cgKOOvyJBNPc1STE4U6G7weNLWLBYy5d4ux2x8gkasJ\n"
+    "U26Qzns3dLlwR5EiUWMWea6xrkEmCMgZK9FGqkjWZCrXgzT/LCrBbBlDSgeF59N8\n"
+    "9iFo7+ryUp9/k5DPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8E\n"
+    "BTADAQH/MB0GA1UdDgQWBBRge2YaRQ2XyolQL30EzTSo//z9SzANBgkqhkiG9w0B\n"
+    "AQUFAAOCAQEA1nPnfE920I2/7LqivjTFKDK1fPxsnCwrvQmeU79rXqoRSLblCKOz\n"
+    "yj1hTdNGCbM+w6DjY1Ub8rrvrTnhQ7k4o+YviiY776BQVvnGCv04zcQLcFGUl5gE\n"
+    "38NflNUVyRRBnMRddWQVDf9VMOyGj/8N7yy5Y0b2qvzfvGn9LhJIZJrglfCm7ymP\n"
+    "AbEVtQwdpf5pLGkkeB6zpxxxYu7KyJesF12KwvhHhm4qxFYxldBniYUr+WymXUad\n"
+    "DKqC5JlR3XC321Y9YeRq4VzW9v493kHMB65jUr9TU/Qr6cf9tveCX4XSQRjbgbME\n"
+    "HMUfpIBvFSDJ3gyICh3WZlXi/EjJKSZp4A==\n"
+    "-----END CERTIFICATE-----\n";
                 esp_http_client_config_t cfg = {};
                 cfg.url = url;
                 cfg.method = HTTP_METHOD_POST;
-                cfg.crt_bundle_attach = esp_crt_bundle_attach;
-                cfg.timeout_ms = 20000;
+                cfg.cert_pem = local ? nullptr : kTtsCaPem;
+                cfg.timeout_ms = local ? 120000 : 20000;
                 cfg.event_handler = tts_http_event;
                 cfg.user_data = &ctx;
                 esp_http_client_handle_t client = esp_http_client_init(&cfg);
                 if (client) {
-                    esp_http_client_set_header(client, "Authorization", auth);
+                    if (!local) { esp_http_client_set_header(client, "Authorization", auth); }
                     esp_http_client_set_header(client, "Content-Type", "application/json");
                     esp_http_client_set_post_field(client, body, strlen(body));
                     if (esp_http_client_perform(client) == ESP_OK) {

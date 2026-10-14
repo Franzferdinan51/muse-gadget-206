@@ -46,6 +46,8 @@ typedef enum {
     MUSE_SETTING_BLE,
     MUSE_SETTING_AVATAR,
     MUSE_SETTING_POWER,
+    MUSE_SETTING_TTS_MODEL,
+    MUSE_SETTING_TTS_VOICE,
     MUSE_SETTING_HATCH,
 } muse_setting_t;
 
@@ -78,6 +80,25 @@ int muse_settings_avatar(void);         /* MUSE_AVATAR_* */
 #define MUSE_POWER_OFF  2   /* never (a critical battery still protects) */
 int muse_settings_power_mode(void);     /* MUSE_POWER_* */
 
+#define MUSE_TTS_MODEL_FREE   0   /* fish-audio/s2.1-pro-free:free (default) */
+#define MUSE_TTS_MODEL_DRAMA3 1   /* Drama 3 on the local Mac server */
+#define MUSE_TTS_MODEL_QWEN3  2   /* Qwen3-TTS on the local Mac server */
+int muse_settings_tts_model(void);      /* MUSE_TTS_MODEL_* */
+#define MUSE_TTS_LOCAL_MAX 95
+void muse_settings_tts_local_url(char out[MUSE_TTS_LOCAL_MAX + 1]);
+
+#define MUSE_TTS_VOICE_MAX     63
+#define MUSE_TTS_VOICE_DEFAULT 0   /* the model's built-in voice */
+/* Voice selection indexes: 0 = Default, 1..count-2 = built-in Fish
+ * Audio presets (display name + reference id), count-1 = Custom
+ * (the stored reference/voice id). */
+typedef struct { const char *name; const char *fish_id; } muse_tts_voice_t;
+int muse_settings_tts_voice_count(void);
+const muse_tts_voice_t *muse_settings_tts_voice_at(int idx);
+#define MUSE_TTS_VOICE_CUSTOM (muse_settings_tts_voice_count() - 1)
+int muse_settings_tts_voice_mode(void); /* voice selection index */
+void muse_settings_tts_voice_id(char out[MUSE_TTS_VOICE_MAX + 1]);
+
 void muse_settings_wifi(char ssid[MUSE_SSID_MAX + 1], char pass[MUSE_PASS_MAX + 1]);
 void muse_settings_hatch_host(char out[MUSE_HOST_MAX + 1]);
 void muse_settings_hatch_vm(char out[MUSE_VM_MAX + 1]);
@@ -93,6 +114,10 @@ void muse_settings_set_wifi_on(bool on);
 void muse_settings_set_ble_on(bool on);
 void muse_settings_set_avatar(int which);   /* MUSE_AVATAR_* */
 void muse_settings_set_power_mode(int mode);   /* MUSE_POWER_* */
+void muse_settings_set_tts_model(int which);   /* MUSE_TTS_MODEL_* */
+void muse_settings_set_tts_local_url(const char *url);
+void muse_settings_set_tts_voice_mode(int mode);   /* MUSE_TTS_VOICE_* */
+void muse_settings_set_tts_voice_id(const char *id);
 /* A network name is remembered first among the saved ones and joined now;
  * an empty ssid forgets every saved network. */
 void muse_settings_set_wifi(const char *ssid, const char *pass);
