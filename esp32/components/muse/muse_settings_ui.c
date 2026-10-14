@@ -1132,6 +1132,41 @@ static void on_bright(lv_event_t *e)
     }
 }
 
+static lv_obj_t *s_tts_val;
+static const char *tts_name(int which)
+{
+    if (which == MUSE_TTS_MODEL_DRAMA3) { return "Drama 3 (local)"; }
+    if (which == MUSE_TTS_MODEL_QWEN3) { return "Qwen3 (local)"; }
+    return "Fish (free)";
+}
+
+static void on_tts_cycle(lv_event_t *e)
+{
+    (void)e;
+    int next = (muse_settings_tts_model() + 1) % (MUSE_TTS_MODEL_QWEN3 + 1);
+    muse_settings_set_tts_model(next);
+    if (s_tts_val) {
+        lv_label_set_text(s_tts_val, tts_name(next));
+    }
+}
+
+static lv_obj_t *s_voice_val;
+static const char *voice_name(int sel)
+{
+    const muse_tts_voice_t *v = muse_settings_tts_voice_at(sel);
+    return v ? v->name : "Default";
+}
+
+static void on_voice_cycle(lv_event_t *e)
+{
+    (void)e;
+    int next = (muse_settings_tts_voice_mode() + 1) % muse_settings_tts_voice_count();
+    muse_settings_set_tts_voice_mode(next);
+    if (s_voice_val) {
+        lv_label_set_text(s_voice_val, voice_name(next));
+    }
+}
+
 static void build_sound_page(lv_obj_t *tile)
 {
     lv_obj_t *list;
@@ -1140,6 +1175,10 @@ static void build_sound_page(lv_obj_t *tile)
     s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
     button(list, LV_SYMBOL_VOLUME_MID "  Test sound", MUSE_BLUE, on_test_sound, NULL);
     s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
+    button(list, "Engine (tap to change)", MUSE_BLUE, on_tts_cycle, NULL);
+    s_tts_val = label(list, MUSE_FONT_20, MUSE_TEXT, tts_name(muse_settings_tts_model()));
+    button(list, "Voice (tap to change)", MUSE_BLUE, on_voice_cycle, NULL);
+    s_voice_val = label(list, MUSE_FONT_20, MUSE_TEXT, voice_name(muse_settings_tts_voice_mode()));
 
     lv_obj_t *meter = lv_obj_create(list);
     lv_obj_remove_style_all(meter);

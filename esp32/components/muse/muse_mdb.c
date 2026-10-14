@@ -320,6 +320,7 @@ static void cmd_health(void)
     out_fmt("\"ota_slot\":\"%s\",", run ? run->label : "?");
     out_fmt("\"fw_version\":\"%s\",", esp_app_get_description()->version);
     out_fmt("\"power_mode\":\"%s\",", muse_settings_power_mode() == MUSE_POWER_ON ? "on" : muse_settings_power_mode() == MUSE_POWER_OFF ? "off" : "auto");
+    out_fmt("\"tts_model\":\"%s\",", muse_settings_tts_model() == MUSE_TTS_MODEL_DRAMA3 ? "drama3" : "free");
     out_fmt("\"power_saving\":%s,", muse_state_power_saving() ? "true" : "false");
     {
         bool sd_present = false, sd_key = false;
@@ -665,9 +666,13 @@ static bool parse_bool(const char *s, bool *out)
 
 static void settings_dump(void)
 {
+    char vbuf[MUSE_TTS_VOICE_MAX + 1];
+    muse_settings_tts_voice_id(vbuf);
+    char lbuf[MUSE_TTS_LOCAL_MAX + 1];
+    muse_settings_tts_local_url(lbuf);
     out_raw("OK\n");
     out_fmt("{\"volume\":%d,\"speaker_on\":%s,\"mic_gain\":%d,\"brightness\":%d,"
-            "\"sleep_s\":%d,\"wifi_on\":%s,\"ble_on\":%s,\"avatar\":\"%s\",\"power_mode\":\"%s\"}\n",
+            "\"sleep_s\":%d,\"wifi_on\":%s,\"ble_on\":%s,\"avatar\":\"%s\",\"power_mode\":\"%s\",\"tts_model\":\"%s\",\"tts_voice\":\"%s\",\"tts_local\":\"%s\"}\n",
             muse_settings_volume(),
             muse_settings_speaker_on() ? "true" : "false",
             muse_settings_mic_gain(),
@@ -676,7 +681,12 @@ static void settings_dump(void)
             muse_settings_wifi_on() ? "true" : "false",
             muse_settings_ble_on() ? "true" : "false",
             muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF ? "pixelgif" : muse_settings_avatar() == MUSE_AVATAR_PIXEL ? "pixel" : muse_settings_avatar() == MUSE_AVATAR_JOLLY ? "jolly" : muse_settings_avatar() == MUSE_AVATAR_INK ? "ink" : muse_settings_avatar() == MUSE_AVATAR_KNIGHT ? "knight" : muse_settings_avatar() == MUSE_AVATAR_BUBBLE ? "bubble" : muse_settings_avatar() == MUSE_AVATAR_HIRES ? "hires" : muse_settings_avatar() == MUSE_AVATAR_STUDIO ? "studio" : "gif",
-            muse_settings_power_mode() == MUSE_POWER_ON ? "on" : muse_settings_power_mode() == MUSE_POWER_OFF ? "off" : "auto");
+            muse_settings_power_mode() == MUSE_POWER_ON ? "on" : muse_settings_power_mode() == MUSE_POWER_OFF ? "off" : "auto",
+            muse_settings_tts_model() == MUSE_TTS_MODEL_DRAMA3 ? "drama3" : muse_settings_tts_model() == MUSE_TTS_MODEL_QWEN3 ? "qwen3" : "free",
+            muse_settings_tts_voice_mode() == MUSE_TTS_VOICE_CUSTOM ? vbuf :
+            (muse_settings_tts_voice_mode() == MUSE_TTS_VOICE_DEFAULT ? "" :
+                muse_settings_tts_voice_at(muse_settings_tts_voice_mode())->name),
+            lbuf);
 }
 
 static void cmd_settings(const char *sub, const char *rest)
@@ -739,6 +749,33 @@ static void cmd_settings(const char *sub, const char *rest)
             else if (strcmp(val, "on") == 0) muse_settings_set_power_mode(MUSE_POWER_ON);
             else if (strcmp(val, "off") == 0) muse_settings_set_power_mode(MUSE_POWER_OFF);
             else { out_raw("ERR bad_args want auto|on|off\n"); return; }
+        } else if (strcmp(key, "tts_vpick") == 0) {
+            int cnt = muse_settings_tts_voice_count();
+            int pick = -1;
+            if (val[0] >= '0' && val[0] <= '9' && val[1] == '\0') { pick = val[0] - '0'; }
+            else if (val[0] >= '0' && val[0] <= '9' && val[1] >= '0' && val[1] <= '9' && val[2] == '\0') { pick = (val[0] - '0') * 10 + (val[1] - '0'); }
+            if (pick < 0 || pick >= cnt) {
+                pick = -1;
+                for (int i = 0; i < cnt; i++) {
+                    if (strcmp(val, muse_settings_tts_voice_at(i)->name) == 0) { pick = i; break; }
+                }
+            }
+            if (pick >= 0 && pick < cnt) { muse_settings_set_tts_voice_mode(pick); }
+        } else if (strcmp(key, "tts_voice") == 0) {
+            if (strcmp(val, "-") == 0) {
+                muse_settings_set_tts_voice_id("");
+                muse_settings_set_tts_voice_mode(MUSE_TTS_VOICE_DEFAULT);
+            } else {
+                muse_settings_set_tts_voice_id(val);
+                muse_settings_set_tts_voice_mode(MUSE_TTS_VOICE_CUSTOM);
+            }
+        } else if (strcmp(key, "tts_model") == 0) {
+            if (strcmp(val, "free") == 0) muse_settings_set_tts_model(MUSE_TTS_MODEL_FREE);
+            else if (strcmp(val, "drama3") == 0) muse_settings_set_tts_model(MUSE_TTS_MODEL_DRAMA3);
+            else if (strcmp(val, "qwen3") == 0) muse_settings_set_tts_model(MUSE_TTS_MODEL_QWEN3);
+            else { out_raw("ERR bad_args want free|drama3|qwen3\n"); return; }
+        } else if (strcmp(key, "tts_local") == 0) {
+            muse_settings_set_tts_local_url(val);
         } else if (strcmp(key, "avatar") == 0) {
             if (strcmp(val, "gif") == 0) muse_settings_set_avatar(MUSE_AVATAR_GIF);
             else if (strcmp(val, "pixel") == 0) muse_settings_set_avatar(MUSE_AVATAR_PIXEL);
