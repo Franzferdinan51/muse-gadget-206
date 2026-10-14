@@ -138,6 +138,9 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, 
 
 static void set_text(lv_obj_t *l, const char *text)
 {
+    if (!l) {
+        return;   /* a label whose page was never built / already dropped */
+    }
     char shown[SHOWN_MAX];
     text = muse_text_showable(text, shown, sizeof(shown));
     if (strcmp(lv_label_get_text(l), text) != 0) {
@@ -1098,7 +1101,6 @@ static void build_sound_page(lv_obj_t *tile)
 
     set_val(s_vol_val, "%d%%", muse_settings_volume());
     set_val(s_gain_val, "%d dB", muse_settings_mic_gain() / 3 * 3);
-    set_val(s_bright_val, "%d%%", muse_settings_brightness());
 }
 
 static void tick_sound(void)

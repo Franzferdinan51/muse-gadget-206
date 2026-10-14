@@ -480,12 +480,13 @@ static void keeper_task(void *arg) {
     uint32_t pending = KEEP_BLE;
     bool napped = false;
     bool setup_done = config_setup_complete();
-    if (setup_done && muse_settings_ble_on()) {
-        // Registered devices boot with the phone companion off; the settings
-        // switch turns it on until the next restart.
-        ESP_LOGI(TAG, "registered; phone setup BLE off at boot");
-        muse_settings_set_ble_on(false);
-    }
+    // MuseOS (owner call, 2026-10-14): the phone-setup switch is a
+    // real setting here. Upstream reset it off at every boot on
+    // registered devices ("on until the next restart"), which read
+    // as a bug to the owner. The saved switch now survives restarts;
+    // the loop first KEEP_BLE pass applies it. The in-boot "setup
+    // just completed" turn-off below still stands (that one is the
+    // pairing flow acting, not the user).
     stack_monitor_t stack = STACK_MONITOR_INIT;
 
     for (;;) {
@@ -640,6 +641,7 @@ bool muse_mdb_ota_start(const char *url, bool force);
 #define OTA_AUTO_PERIOD_MS (6LL * 60 * 60 * 1000)
 #define OTA_AUTO_BUF       2048
 #define OTA_AUTO_FAIL_KEY  "lastfail"
+#define OTA_AUTO_APPLIED_KEY "applied"
 
 /* Why the last OTA attempt failed, persisted across reboots: ota.c
  * knows the reason but only reports it live, and the boots that fail
@@ -800,23 +802,23 @@ static void ota_auto_check_once(void)
         return;
     }
     nvs_handle_t nv;
-    if (nvs_open(OTA_AUTO_NVS_NS, NVS_READWRITE, &nv) == ESP_OK) {
-        char tried[64] = "";
-        size_t n = sizeof(tried);
-        nvs_get_str(nv, OTA_AUTO_NVS_KEY, tried, &n);
-        if (strcmp(tried, version) == 0) {
-            ESP_LOGW(TAG, "ota auto: %s already attempted once; not retrying", version);
+    if (nvs_open(OTA_AUTO_NVS_NS, NVS_READONLY, &nv) == ESP_OK) {
+        char applied[64] = "";
+        size_t n = sizeof(applied);
+        nvs_get_str(nv, OTA_AUTO_APPLIED_KEY, applied, &n);
+        nvs_close(nv);
+        if (strcmp(applied, version) == 0) {
+            // We installed this version before and are not running it:
+            // it rolled back. Never chase a rolled-back image.
+            ESP_LOGW(TAG, "ota auto: %s applied before and rolled back; skipping", version);
             snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
-                     "%.40s already tried once", version);
-            nvs_close(nv);
+                     "%.40s didn't stick - skipped", version);
             return;
         }
-        // Record the attempt BEFORE downloading: if this image rolls
-        // back, the restored build reads the same record.
-        nvs_set_str(nv, OTA_AUTO_NVS_KEY, version);
-        nvs_commit(nv);
-        nvs_close(nv);
     }
+    // A failed or interrupted DOWNLOAD records nothing blocking
+    // (only the lastfail reason, via the OTA callback): the next
+    // check, manual or scheduled, simply tries again.
     ESP_LOGI(TAG, "ota auto: updating %s -> %s", running, version);
     snprintf(s_ota_auto_status, sizeof(s_ota_auto_status),
              "Updating to %.40s...", version);
@@ -936,6 +938,14 @@ static void glue_ota_cb(const ota_event_t *ev, void *user)
         ota_auto_fail_save(rec);
     } else if (ev->result == OTA_RESULT_APPLIED) {
         ota_auto_fail_save(NULL);
+        if (s_ota_want_ver[0]) {
+            nvs_handle_t nv;
+            if (nvs_open(OTA_AUTO_NVS_NS, NVS_READWRITE, &nv) == ESP_OK) {
+                nvs_set_str(nv, OTA_AUTO_APPLIED_KEY, s_ota_want_ver);
+                nvs_commit(nv);
+                nvs_close(nv);
+            }
+        }
     }
 }
 
