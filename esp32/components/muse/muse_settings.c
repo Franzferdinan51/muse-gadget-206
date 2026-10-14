@@ -123,7 +123,7 @@ esp_err_t muse_settings_init(void)
     load_u8("mic_gain", &s.mic_gain);
     load_u8("bright", &s.brightness);
     load_u8("avatar", &s.avatar);
-    if (s.avatar > MUSE_AVATAR_PIXEL_GIF) { s.avatar = MUSE_AVATAR_GIF; }
+    if (s.avatar > MUSE_AVATAR_STUDIO) { s.avatar = MUSE_AVATAR_GIF; }
     nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
     if (nvs_get_u8(s_nvs, "wifi_on", &b) == ESP_OK) {
         s.wifi_on = b;
@@ -230,7 +230,7 @@ void muse_settings_set_brightness(int pct)
 
 void muse_settings_set_avatar(int which)
 {
-    int v = clampi(which, MUSE_AVATAR_GIF, MUSE_AVATAR_PIXEL_GIF);
+    int v = clampi(which, MUSE_AVATAR_GIF, MUSE_AVATAR_STUDIO);
     LOCKED(s.avatar = (uint8_t)v);
     save_u8("avatar", (uint8_t)v);
     notify(MUSE_SETTING_AVATAR);

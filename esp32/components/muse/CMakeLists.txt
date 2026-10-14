@@ -57,7 +57,7 @@ if(CONFIG_MUSE_ENABLED)
     # clips; the S3 can't decode video, so GIF it is). 206 only: ~1MB
     # the other boards must not pay for.
     if(CONFIG_MUSE_BOARD_WAVESHARE_S3_206)
-        list(APPEND embed "juno/juno_idle.gif" "juno/juno_orb.gif" "juno/juno_talking.gif" "juno/juno_typing.gif" "juno/juno_pixel_idle.gif" "juno/juno_pixel_revue.gif")
+        list(APPEND embed "juno/juno_idle.gif" "juno/juno_orb.gif" "juno/juno_talking.gif" "juno/juno_typing.gif" "juno/juno_pixel_idle.gif" "juno/juno_pixel_revue.gif" "juno/jollybot.gif" "juno/still_ink.gif" "juno/still_knight.gif" "juno/still_bubble.gif" "juno/still_hires.gif" "juno/still_studio.gif")
     endif()
     # Baked Montserrat (tools/muse/gen_fonts.sh): the UI's only text fonts.
     list(APPEND srcs

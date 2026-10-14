@@ -64,6 +64,12 @@ bool muse_settings_ble_on(void);
 #define MUSE_AVATAR_GIF   0       /* the animated Juno clips (default) */
 #define MUSE_AVATAR_PIXEL 1       /* the original pixel character */
 #define MUSE_AVATAR_PIXEL_GIF 2   /* the animated pixel Juno clips (Muse-Avatar) */
+#define MUSE_AVATAR_JOLLY 3       /* Jollybot, the original Muse (Muse-Avatar) */
+#define MUSE_AVATAR_INK 4         /* Hermes ink, white variant (collection) */
+#define MUSE_AVATAR_KNIGHT 5      /* Hermes knight (collection) */
+#define MUSE_AVATAR_BUBBLE 6      /* Juno bubble (collection) */
+#define MUSE_AVATAR_HIRES 7       /* Juno hi-res (collection) */
+#define MUSE_AVATAR_STUDIO 8      /* Juno studio render (collection) */
 int muse_settings_avatar(void);         /* MUSE_AVATAR_* */
 
 void muse_settings_wifi(char ssid[MUSE_SSID_MAX + 1], char pass[MUSE_PASS_MAX + 1]);

@@ -133,7 +133,7 @@ static bool s_image_sticky;   /* agent's persisted face: taps don't dismiss it *
  * (sticky overlay) and reply layouts take precedence, the pixel canvas
  * is the fallback. */
 #if CONFIG_MUSE_BOARD_WAVESHARE_S3_206 && CONFIG_LV_USE_GIF
-#define JUNO_CLIPS 6
+#define JUNO_CLIPS 12
 extern const uint8_t juno_idle_start[] asm("_binary_juno_idle_gif_start");
 extern const uint8_t juno_idle_end[] asm("_binary_juno_idle_gif_end");
 extern const uint8_t juno_orb_start[] asm("_binary_juno_orb_gif_start");
@@ -146,6 +146,18 @@ extern const uint8_t juno_pixel_idle_start[] asm("_binary_juno_pixel_idle_gif_st
 extern const uint8_t juno_pixel_idle_end[] asm("_binary_juno_pixel_idle_gif_end");
 extern const uint8_t juno_pixel_revue_start[] asm("_binary_juno_pixel_revue_gif_start");
 extern const uint8_t juno_pixel_revue_end[] asm("_binary_juno_pixel_revue_gif_end");
+extern const uint8_t jollybot_start[] asm("_binary_jollybot_gif_start");
+extern const uint8_t jollybot_end[] asm("_binary_jollybot_gif_end");
+extern const uint8_t still_ink_start[] asm("_binary_still_ink_gif_start");
+extern const uint8_t still_ink_end[] asm("_binary_still_ink_gif_end");
+extern const uint8_t still_knight_start[] asm("_binary_still_knight_gif_start");
+extern const uint8_t still_knight_end[] asm("_binary_still_knight_gif_end");
+extern const uint8_t still_bubble_start[] asm("_binary_still_bubble_gif_start");
+extern const uint8_t still_bubble_end[] asm("_binary_still_bubble_gif_end");
+extern const uint8_t still_hires_start[] asm("_binary_still_hires_gif_start");
+extern const uint8_t still_hires_end[] asm("_binary_still_hires_gif_end");
+extern const uint8_t still_studio_start[] asm("_binary_still_studio_gif_start");
+extern const uint8_t still_studio_end[] asm("_binary_still_studio_gif_end");
 /* The Juno GIF face: 1 = animated clips, 0 = parked (owner call,
  * 2026-10-14 - the pixel character is the face until we design a
  * purpose-built avatar). Assets and sync plumbing stay in tree. */
@@ -985,6 +997,12 @@ static void build_screen(void)
             { juno_typing_start, juno_typing_end },
             { juno_pixel_idle_start, juno_pixel_idle_end },
             { juno_pixel_revue_start, juno_pixel_revue_end },
+            { jollybot_start, jollybot_end },
+            { still_ink_start, still_ink_end },
+            { still_knight_start, still_knight_end },
+            { still_bubble_start, still_bubble_end },
+            { still_hires_start, still_hires_end },
+            { still_studio_start, still_studio_end },
         };
         for (int i = 0; i < JUNO_CLIPS; i++) {
             s_juno_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -1791,7 +1809,11 @@ static void juno_sync(muse_mode_t mode)
     bool overlay = s_image_dsc.data != NULL || s_gif_dsc.data != NULL;
     bool want = s_answer < 0 && !overlay;
     int clip;
-    if (muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF) {
+    if (muse_settings_avatar() >= MUSE_AVATAR_JOLLY) {
+        /* Repo faces: one clip each (Jolly animates; the collection
+         * pieces are stills). */
+        clip = 6 + (muse_settings_avatar() - MUSE_AVATAR_JOLLY);
+    } else if (muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF) {
         /* The Muse-Avatar pixel Juno: idle loop, and the revue clip while
          * happy - the pet-tap reaction. */
         clip = muse_state_happiness() > 0.0f ? 5 : 4;

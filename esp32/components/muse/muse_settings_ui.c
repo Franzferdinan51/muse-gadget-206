@@ -1045,12 +1045,18 @@ static const char *avatar_name(int which)
 {
     return which == MUSE_AVATAR_PIXEL_GIF ? "Pixel Juno (animated)"
            : which == MUSE_AVATAR_PIXEL ? "Pixel Juno"
+           : which == MUSE_AVATAR_JOLLY ? "Jolly"
+           : which == MUSE_AVATAR_INK ? "Hermes ink"
+           : which == MUSE_AVATAR_KNIGHT ? "Hermes knight"
+           : which == MUSE_AVATAR_BUBBLE ? "Juno bubble"
+           : which == MUSE_AVATAR_HIRES ? "Juno hi-res"
+           : which == MUSE_AVATAR_STUDIO ? "Juno studio"
                                         : "Juno GIF";
 }
 static void on_avatar_cycle(lv_event_t *e)
 {
     (void)e;
-    int next = (muse_settings_avatar() + 1) % (MUSE_AVATAR_PIXEL_GIF + 1);
+    int next = (muse_settings_avatar() + 1) % (MUSE_AVATAR_STUDIO + 1);
     muse_settings_set_avatar(next);
     if (s_avatar_val) {
         lv_label_set_text(s_avatar_val, avatar_name(next));
