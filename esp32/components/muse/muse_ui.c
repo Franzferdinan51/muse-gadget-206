@@ -45,6 +45,7 @@
 #include "muse_state.h"
 #include "muse_text.h"
 #include "muse_theme.h"
+#include "muse_boot_logo.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
@@ -1656,6 +1657,120 @@ static void frame_tick(lv_timer_t *timer)
     muse_ui_frame_stage = 7;
 }
 
+
+/* ---- Boot splash (MuseOS) ---------------------------------------------
+ * The owner's Muse mark over the theme backdrop: scales in with an
+ * overshoot, the wordmark fades up under it, then the whole overlay
+ * fades out into the face and deletes itself. Pure LVGL animation -
+ * no frame-loop work - and a fault here can only cost a plain boot. */
+static lv_obj_t *s_splash;
+
+static void splash_set_opa(void *obj, int32_t v);
+
+static void splash_fade_done(lv_anim_t *a)
+{
+    (void)a;
+    if (s_splash) {
+        lv_obj_delete(s_splash);
+        s_splash = NULL;
+    }
+}
+
+static void splash_fade_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_splash) {
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_splash);
+    lv_anim_set_exec_cb(&a, splash_set_opa);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a, 380);
+    lv_anim_set_completed_cb(&a, splash_fade_done);
+    lv_anim_start(&a);
+}
+
+static void splash_set_y(void *obj, int32_t v)
+{
+    lv_obj_set_style_translate_y((lv_obj_t *)obj, v, 0);
+}
+
+static void splash_set_opa(void *obj, int32_t v)
+{
+    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+static void build_boot_splash(void)
+{
+    if (s_w < 300 || s_h < 400) {
+        return;  /* composed for the 206's glass; small boards skip it */
+    }
+    lv_obj_t *o = lv_obj_create(lv_screen_active());
+    if (!o) {
+        return;
+    }
+    s_splash = o;
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, s_w, s_h);
+    lv_obj_set_pos(o, 0, 0);
+    muse_theme_backdrop(o);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *img = lv_image_create(o);
+    lv_image_set_src(img, &muse_boot_logo);
+    lv_image_set_scale(img, 205);
+    lv_obj_align(img, LV_ALIGN_CENTER, 0, -52);
+    lv_obj_set_style_opa(img, LV_OPA_TRANSP, 0);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, img);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_image_set_scale);
+    lv_anim_set_values(&a, 205, 262);
+    lv_anim_set_duration(&a, 640);
+    lv_anim_set_path_cb(&a, lv_anim_path_overshoot);
+    lv_anim_start(&a);
+
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, img);
+    lv_anim_set_exec_cb(&a, splash_set_opa);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&a, 380);
+    lv_anim_start(&a);
+
+    lv_obj_t *lbl = make_label(o, MUSE_FONT_28, 0xFFFFFF);
+    if (lbl) {
+        lv_label_set_text(lbl, "Muse");
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 104);
+        lv_obj_set_style_opa(lbl, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_translate_y(lbl, 14, 0);
+
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, lbl);
+        lv_anim_set_exec_cb(&a, splash_set_opa);
+        lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+        lv_anim_set_duration(&a, 420);
+        lv_anim_set_delay(&a, 850);
+        lv_anim_start(&a);
+
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, lbl);
+        lv_anim_set_exec_cb(&a, splash_set_y);
+        lv_anim_set_values(&a, 14, 0);
+        lv_anim_set_duration(&a, 420);
+        lv_anim_set_delay(&a, 850);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    }
+
+    lv_timer_t *t = lv_timer_create(splash_fade_cb, 1850, NULL);
+    if (t) {
+        lv_timer_set_repeat_count(t, 1);
+    }
+}
+
 esp_err_t muse_ui_start(void)
 {
     s_w = muse_board->width;
@@ -1700,6 +1815,7 @@ esp_err_t muse_ui_start(void)
         muse_menu_build(lv_screen_active(), s_w, s_h);
     }
     build_overlays();
+    build_boot_splash();
     lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
     s_ready = true;
     muse_board->display_unlock();

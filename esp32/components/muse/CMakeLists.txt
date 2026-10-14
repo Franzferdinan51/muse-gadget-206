@@ -29,6 +29,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_state.c"
         "muse_battery.c"
         "muse_ui.c"
+        "muse_boot_logo.c"
         "muse_status.c"
         "muse_audio.c"
         "muse_pmu.c"
