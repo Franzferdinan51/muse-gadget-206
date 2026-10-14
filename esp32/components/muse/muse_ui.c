@@ -1833,12 +1833,14 @@ static void juno_sync(muse_mode_t mode)
     }
     static const int clip_for_mode[MUSE_MODE_COUNT] = { 1, 0, 1, 3, 2, 1, 1 };
     bool overlay = s_image_dsc.data != NULL || s_gif_dsc.data != NULL;
-    /* Thinking keeps the clip face: the answer layout claims the face
-     * for the whole turn, and without this the GIF faces fell back to
-     * the stock canvas character while thinking - the typing clip
-     * never got a chance to show. The reply label layers over the
-     * lower face area, so the clip stays readable. */
-    bool want = (s_answer < 0 || mode == MUSE_MODE_THINKING) && !overlay;
+    /* Thinking and speaking keep the clip face: the answer layout
+     * claims the face for the whole turn, and without this the GIF
+     * faces fell back to the stock canvas character for the whole
+     * reply - the typing and talking clips never got a chance to
+     * show. The reply label layers over the lower face area, so the
+     * clip stays readable. (fw 1.7.39: speaking joins thinking.) */
+    bool want = (s_answer < 0 || mode == MUSE_MODE_THINKING ||
+                 mode == MUSE_MODE_SPEAKING) && !overlay;
     int clip;
     if (muse_settings_avatar() == MUSE_AVATAR_JOLLY) {
         /* Jolly: idle loop, and the hearts clip while happy - the
