@@ -983,7 +983,10 @@ static void build_screen(void)
             s_juno_dsc[i].data = clips[i].start;
         }
         s_juno = lv_gif_create(face);
-        lv_gif_set_color_format(s_juno, LV_COLOR_FORMAT_RGB565);
+        /* ARGB, not RGB565: the clips carry a real transparent index
+         * (background keyed out host-side) and must composite over
+         * the face backdrop. RGB565 dropped the alpha channel. */
+        lv_gif_set_color_format(s_juno, LV_COLOR_FORMAT_ARGB8888);
         lv_obj_set_size(s_juno, 200, 200);
         lv_obj_align(s_juno, LV_ALIGN_CENTER, 0, s_big_y);
         lv_obj_add_flag(s_juno, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
