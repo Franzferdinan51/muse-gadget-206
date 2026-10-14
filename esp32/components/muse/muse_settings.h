@@ -63,6 +63,7 @@ bool muse_settings_ble_on(void);
 
 #define MUSE_AVATAR_GIF   0       /* the animated Juno clips (default) */
 #define MUSE_AVATAR_PIXEL 1       /* the original pixel character */
+#define MUSE_AVATAR_PIXEL_GIF 2   /* the animated pixel Juno clips (Muse-Avatar) */
 int muse_settings_avatar(void);         /* MUSE_AVATAR_* */
 
 void muse_settings_wifi(char ssid[MUSE_SSID_MAX + 1], char pass[MUSE_PASS_MAX + 1]);

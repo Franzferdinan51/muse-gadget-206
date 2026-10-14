@@ -673,7 +673,7 @@ static void settings_dump(void)
             muse_settings_sleep_s(),
             muse_settings_wifi_on() ? "true" : "false",
             muse_settings_ble_on() ? "true" : "false",
-            muse_settings_avatar() == MUSE_AVATAR_PIXEL ? "pixel" : "gif");
+            muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF ? "pixelgif" : muse_settings_avatar() == MUSE_AVATAR_PIXEL ? "pixel" : "gif");
 }
 
 static void cmd_settings(const char *sub, const char *rest)
@@ -691,7 +691,7 @@ static void cmd_settings(const char *sub, const char *rest)
         else if (strcmp(key, "sleep_s") == 0) out_fmt("OK sleep_s=%d\n", muse_settings_sleep_s());
         else if (strcmp(key, "wifi_on") == 0) out_fmt("OK wifi_on=%s\n", muse_settings_wifi_on() ? "on" : "off");
         else if (strcmp(key, "ble_on") == 0) out_fmt("OK ble_on=%s\n", muse_settings_ble_on() ? "on" : "off");
-        else if (strcmp(key, "avatar") == 0) out_fmt("OK avatar=%s\n", muse_settings_avatar() == MUSE_AVATAR_PIXEL ? "pixel" : "gif");
+        else if (strcmp(key, "avatar") == 0) out_fmt("OK avatar=%s\n", muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF ? "pixelgif" : muse_settings_avatar() == MUSE_AVATAR_PIXEL ? "pixel" : "gif");
         else out_fmt("ERR bad_args unknown setting '%s'\n", key);
         return;
     }
@@ -733,6 +733,7 @@ static void cmd_settings(const char *sub, const char *rest)
         } else if (strcmp(key, "avatar") == 0) {
             if (strcmp(val, "gif") == 0) muse_settings_set_avatar(MUSE_AVATAR_GIF);
             else if (strcmp(val, "pixel") == 0) muse_settings_set_avatar(MUSE_AVATAR_PIXEL);
+            else if (strcmp(val, "pixelgif") == 0) muse_settings_set_avatar(MUSE_AVATAR_PIXEL_GIF);
             else { out_raw("ERR bad_args want gif|pixel\n"); return; }
         } else {
             out_fmt("ERR bad_args unknown setting '%s'\n", key);

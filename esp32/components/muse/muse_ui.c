@@ -133,7 +133,7 @@ static bool s_image_sticky;   /* agent's persisted face: taps don't dismiss it *
  * (sticky overlay) and reply layouts take precedence, the pixel canvas
  * is the fallback. */
 #if CONFIG_MUSE_BOARD_WAVESHARE_S3_206 && CONFIG_LV_USE_GIF
-#define JUNO_CLIPS 4
+#define JUNO_CLIPS 6
 extern const uint8_t juno_idle_start[] asm("_binary_juno_idle_gif_start");
 extern const uint8_t juno_idle_end[] asm("_binary_juno_idle_gif_end");
 extern const uint8_t juno_orb_start[] asm("_binary_juno_orb_gif_start");
@@ -142,6 +142,10 @@ extern const uint8_t juno_talking_start[] asm("_binary_juno_talking_gif_start");
 extern const uint8_t juno_talking_end[] asm("_binary_juno_talking_gif_end");
 extern const uint8_t juno_typing_start[] asm("_binary_juno_typing_gif_start");
 extern const uint8_t juno_typing_end[] asm("_binary_juno_typing_gif_end");
+extern const uint8_t juno_pixel_idle_start[] asm("_binary_juno_pixel_idle_gif_start");
+extern const uint8_t juno_pixel_idle_end[] asm("_binary_juno_pixel_idle_gif_end");
+extern const uint8_t juno_pixel_revue_start[] asm("_binary_juno_pixel_revue_gif_start");
+extern const uint8_t juno_pixel_revue_end[] asm("_binary_juno_pixel_revue_gif_end");
 /* The Juno GIF face: 1 = animated clips, 0 = parked (owner call,
  * 2026-10-14 - the pixel character is the face until we design a
  * purpose-built avatar). Assets and sync plumbing stay in tree. */
@@ -979,6 +983,8 @@ static void build_screen(void)
             { juno_orb_start, juno_orb_end },
             { juno_talking_start, juno_talking_end },
             { juno_typing_start, juno_typing_end },
+            { juno_pixel_idle_start, juno_pixel_idle_end },
+            { juno_pixel_revue_start, juno_pixel_revue_end },
         };
         for (int i = 0; i < JUNO_CLIPS; i++) {
             s_juno_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -1774,7 +1780,7 @@ static void juno_sync(muse_mode_t mode)
      * character the alternative - Settings > Display or
      * `settings set avatar gif|pixel`, polled here so it applies
      * live. The compile-time gate can still park the clips. */
-    if (!MUSE_JUNO_GIF_FACE || muse_settings_avatar() != MUSE_AVATAR_GIF) {
+    if (!MUSE_JUNO_GIF_FACE || muse_settings_avatar() == MUSE_AVATAR_PIXEL) {
         if (!lv_obj_has_flag(s_juno, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_add_flag(s_juno, LV_OBJ_FLAG_HIDDEN);
             lv_obj_remove_flag(s_canvas, LV_OBJ_FLAG_HIDDEN);
@@ -1784,7 +1790,14 @@ static void juno_sync(muse_mode_t mode)
     static const int clip_for_mode[MUSE_MODE_COUNT] = { 1, 0, 1, 3, 2, 1, 1 };
     bool overlay = s_image_dsc.data != NULL || s_gif_dsc.data != NULL;
     bool want = s_answer < 0 && !overlay;
-    int clip = (mode >= 0 && mode < MUSE_MODE_COUNT) ? clip_for_mode[mode] : 1;
+    int clip;
+    if (muse_settings_avatar() == MUSE_AVATAR_PIXEL_GIF) {
+        /* The Muse-Avatar pixel Juno: idle loop, and the revue clip while
+         * happy - the pet-tap reaction. */
+        clip = muse_state_happiness() > 0.0f ? 5 : 4;
+    } else {
+        clip = (mode >= 0 && mode < MUSE_MODE_COUNT) ? clip_for_mode[mode] : 1;
+    }
     if (want && clip != s_juno_clip) {
         lv_gif_set_src(s_juno, &s_juno_dsc[clip]);
         s_juno_clip = clip;

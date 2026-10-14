@@ -1040,10 +1040,21 @@ static void set_val(lv_obj_t *l, const char *fmt, int v);
 
 /* ---------- Display ---------- */
 
-static void on_avatar_sw(lv_event_t *e)
+static lv_obj_t *s_avatar_val;
+static const char *avatar_name(int which)
 {
-    muse_settings_set_avatar(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED)
-                                 ? MUSE_AVATAR_GIF : MUSE_AVATAR_PIXEL);
+    return which == MUSE_AVATAR_PIXEL_GIF ? "Pixel Juno (animated)"
+           : which == MUSE_AVATAR_PIXEL ? "Pixel Juno"
+                                        : "Juno GIF";
+}
+static void on_avatar_cycle(lv_event_t *e)
+{
+    (void)e;
+    int next = (muse_settings_avatar() + 1) % (MUSE_AVATAR_PIXEL_GIF + 1);
+    muse_settings_set_avatar(next);
+    if (s_avatar_val) {
+        lv_label_set_text(s_avatar_val, avatar_name(next));
+    }
 }
 
 static void build_display_page(lv_obj_t *tile)
@@ -1052,8 +1063,9 @@ static void build_display_page(lv_obj_t *tile)
     s_display = page(tile, "DISPLAY", true, &list);
     s_bright_sl = slider(list, "Brightness", 10, 100, muse_settings_brightness(), &s_bright_val, on_bright);
     set_val(s_bright_val, "%d%%", muse_settings_brightness());
-    /* On = the Juno GIF face, off = the pixel character. */
-    s_avatar_sw = switch_row(list, "Juno GIF avatar", muse_settings_avatar() == MUSE_AVATAR_GIF, on_avatar_sw);
+    /* Tap cycles: Juno GIF -> Pixel Juno -> Pixel Juno (animated). */
+    button(list, "Avatar (tap to change)", MUSE_BLUE, on_avatar_cycle, NULL);
+    s_avatar_val = label(list, MUSE_FONT_20, MUSE_TEXT, avatar_name(muse_settings_avatar()));
 }
 
 /* ---------- Sound ---------- */
