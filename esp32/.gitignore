@@ -50,3 +50,6 @@ __pycache__/
 .gradle/
 .idea/
 local.properties
+
+# Local SDK token overlay - never committed.
+devices/sdkconfig.local
