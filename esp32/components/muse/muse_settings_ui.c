@@ -918,9 +918,34 @@ static void tick_hatch(void)
     muse_settings_hatch_host(host);
     muse_settings_hatch_vm(vm);
     set_text(s_hatch_host, host);
-    set_text(s_hatch_vm, vm[0] ? vm : "Not set");
+    bool linked = muse_link_hatch_linked();
+    if (!vm[0] && linked) {
+        /* Paired via the Muse app: the VM lives in the Link store, not
+         * in these settings. Ask the Link (cached: this ticks per second). */
+        static char s_link_vm[MUSE_VM_MAX + 1];
+        static int64_t s_link_vm_at_us;
+        int64_t now_us = esp_timer_get_time();
+        if (!s_link_vm[0] || now_us - s_link_vm_at_us > 5000000) {
+            char id[MUSE_VM_MAX + 1] = "", name[48] = "";
+            char *tok = NULL;
+            s_link_vm[0] = '\0';
+            if (muse_link_hatch_vm("", id, sizeof(id), name, sizeof(name), &tok) && id[0]) {
+                strlcpy(s_link_vm, name[0] ? name : id, sizeof(s_link_vm));
+            }
+            s_link_vm_at_us = now_us;
+        }
+        set_text(s_hatch_vm, s_link_vm[0] ? s_link_vm : "Set (via Muse link)");
+    } else {
+        set_text(s_hatch_vm, vm[0] ? vm : "Not set");
+    }
     size_t n = muse_settings_hatch_token_len();
-    snprintf(buf, sizeof(buf), n ? "Set (%u chars)" : "Not set", (unsigned)n);
+    if (n) {
+        snprintf(buf, sizeof(buf), "Set (%u chars)", (unsigned)n);
+    } else if (linked) {
+        snprintf(buf, sizeof(buf), "Set (via Muse link)");
+    } else {
+        snprintf(buf, sizeof(buf), "Not set");
+    }
     set_text(s_hatch_token, buf);
 }
 
