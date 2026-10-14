@@ -379,7 +379,7 @@ static bool display_lock(int timeout_ms)
     return esp_lv_adapter_lock(timeout_ms) == ESP_OK;
 }
 
-static void set_brightness(int pct)
+static void set_brightness_direct(int pct)
 {
     /* CO5300 "write display brightness" (0x51). */
     /* CO5300 "write display brightness" (0x51), QSPI-framed. */
@@ -387,7 +387,7 @@ static void set_brightness(int pct)
     esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | (0x51 << 8), &level, 1);
 }
 
-static void panel_sleep(bool sleep)
+static void panel_sleep_direct(bool sleep)
 {
     if (sleep) {
         /* Plain SLPIN (0x10). */
@@ -409,6 +409,33 @@ static void panel_sleep(bool sleep)
             vTaskDelay(pdMS_TO_TICKS(c->delay_ms));
         }
     }
+}
+
+/* Panel control must not interleave with pixel DMA: a command that
+ * lands while lcd_send has a chunk on the wire can eat that chunk's
+ * completion (SLPIN to a panel mid-transfer never completes), which
+ * wedges the whole flush pipeline. muse_lcd_bands_run executes the
+ * command inside the send task, after the previous band's DMA has
+ * drained - one serializer for control and data. Before the bands
+ * are registered it runs the function directly. */
+static void brightness_tramp(void *arg)
+{
+    set_brightness_direct((int)(uintptr_t)arg);
+}
+
+static void set_brightness(int level)
+{
+    muse_lcd_bands_run(brightness_tramp, (void *)(uintptr_t)level);
+}
+
+static void panel_sleep_tramp(void *arg)
+{
+    panel_sleep_direct((bool)(uintptr_t)arg);
+}
+
+static void panel_sleep(bool sleep)
+{
+    muse_lcd_bands_run(panel_sleep_tramp, (void *)(uintptr_t)sleep);
 }
 
 static unsigned poll_buttons(void)

@@ -41,6 +41,7 @@ volatile uint32_t muse_bands_queued;
 volatile uint32_t muse_bands_chunks_sent;
 volatile uint32_t muse_bands_chunk_isrs;
 volatile uint32_t muse_bands_notifies;
+volatile uint32_t muse_bands_queue_fails;
 
 static lv_display_t *s_disp;
 static esp_lcd_panel_handle_t s_panel;
@@ -88,7 +89,11 @@ static esp_err_t queue_band(lv_display_t *disp, esp_lcd_panel_handle_t panel, in
     (void)ctx;
     band_t b = { data, x1, y1, x2, y2 };
     muse_bands_queued++;
-    return xQueueSend(s_bands, &b, 0) == pdTRUE ? ESP_OK : ESP_FAIL;
+    if (xQueueSend(s_bands, &b, 0) != pdTRUE) {
+        muse_bands_queue_fails++;   /* was a silent ESP_FAIL */
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 /*
@@ -110,8 +115,6 @@ static void send_bands(void *arg)
         }
         size_t row = (size_t)(b.x2 - b.x1) * 2;
         int rows = s_chunk_bytes / row & ~1;
-        /* LVGL sends no more until this band is done, so nothing is still
-         * counting down. */
         s_chunks_out = (b.y2 - b.y1 + rows - 1) / rows;
         for (int y = b.y1; y < b.y2; y += rows) {
             int h = b.y2 - y < rows ? b.y2 - y : rows;
@@ -127,6 +130,20 @@ static void send_bands(void *arg)
             }
             k ^= 1;
         }
+        /* Band boundary: draw_bitmap returns when a chunk is QUEUED,
+         * not when its DMA completes. If the next band's count were
+         * assigned while this band's last chunk is still on the wire,
+         * that chunk's ISR would decrement the wrong band's counter
+         * and strand a flush (seen twice: bands_queued = notifies + 1,
+         * chunks = isrs + 1, adapter lock held forever). Wait for the
+         * count to drain before touching the next band. */
+        int waited_ms = 0;
+        while (s_chunks_out > 0) {
+            vTaskDelay(1);
+            if (++waited_ms == 3000) {
+                ESP_LOGW(TAG, "band completion drain >3s (chunks_out=%d)", s_chunks_out);
+            }
+        }
     }
 }
 
@@ -137,7 +154,7 @@ lv_display_t *muse_lcd_bands_register(esp_lv_adapter_display_config_t cfg, int l
     if (xTaskGetCoreID(xTaskGetCurrentTaskHandle()) != MUSE_UI_CORE) {
         ESP_LOGE(TAG, "not pinned to core %d: the panel's SPI interrupt can strand the send task", MUSE_UI_CORE);
     }
-    s_bands = xQueueCreate(2, sizeof(band_t));
+    s_bands = xQueueCreate(6, sizeof(band_t));   /* boundary drain wait drains slower */
     s_call_lock = xSemaphoreCreateMutex();
     s_call_done = xSemaphoreCreateBinary();
     s_chunk_free = xSemaphoreCreateCounting(2, 2);
