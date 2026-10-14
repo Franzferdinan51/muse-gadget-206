@@ -62,7 +62,13 @@ static esp_err_t open_codecs(void)
         return ESP_FAIL;
     }
     s_open = true;
-    esp_codec_dev_set_out_mute(s_spk, s_out_muted);
+    /* Every open starts from silence (fw 1.7.40): the cached gate flag
+     * can claim anything after a power cycle, but the output stage only
+     * earns its keep on a real signal chunk - audio_write_inner reopens
+     * the gate then. A stale "unmuted" flag left the PA live and unfed,
+     * whistling at ~900 Hz through whole thinking windows. */
+    s_out_muted = true;
+    esp_codec_dev_set_out_mute(s_spk, true);
     return ESP_OK;
 }
 
@@ -123,9 +129,14 @@ void muse_audio_set_volume(int volume)
 
 void muse_audio_output_mute(bool mute)
 {
-    if (!s_spk || !s_open || mute == s_out_muted) {
+    if (!s_spk || !s_open) {
+        s_out_muted = mute;   /* intent only; open_codecs forces silence */
         return;
     }
+    /* Always reach the hardware (fw 1.7.40): the cached flag can desync
+     * from the codec across audio power cycles, and a mute(true) skipped
+     * as "already muted" left the output stage live and whistling while
+     * the watch was thinking. The codec call is one I2C write - cheap. */
     if (esp_codec_dev_set_out_mute(s_spk, mute) == ESP_CODEC_DEV_OK) {
         s_out_muted = mute;
     }
