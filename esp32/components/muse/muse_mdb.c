@@ -40,6 +40,14 @@
 #include "muse_input.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
+#include "esp_idf_version.h"
+#include "esp_partition.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include <dirent.h>
+#include <sys/stat.h>
 #include "muse_state.h"
 #include "muse_ui.h"
 #include "muse_wifi.h"
@@ -132,12 +140,15 @@ volatile uint32_t muse_mdb_stream_calls;
 
 static void cmd_help(void)
 {
-    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot config pump\n");
+    out_raw("OK mdb verbs: help version health logs panic screenshot tap swipe press goto open wake sleep reboot poweroff config settings sd sys nvs loglevel pump chirp ota\n");
 }
 
 static void cmd_version(void)
 {
-    out_raw("OK version=0.1 protocol=1 firmware=museos-bringup\n");
+    /* Meta values carry no spaces (PROTOCOL.md S3); the board's full
+     * display name lives in `mdb sys info`. */
+    out_fmt("OK version=0.2 protocol=2 firmware=%s\n",
+            esp_app_get_description()->version);
 }
 
 /* Link state as the health JSON's muse_link string. */
@@ -195,6 +206,19 @@ __attribute__((weak)) bool muse_mdb_sd_status(bool *present, unsigned *total_mb,
 {
     (void)present; (void)total_mb; (void)free_mb; (void)key_on_sd;
     return false;
+}
+
+/* SD mount action; the glue owns the host driver. Weak: unsupported. */
+__attribute__((weak)) bool muse_mdb_sd_mount(void)
+{
+    return false;
+}
+
+/* A setting changed over MDB; the glue may need to re-apply live state
+ * (keeper kicks). Weak: nothing to re-apply. */
+__attribute__((weak)) void muse_mdb_settings_changed(const char *key)
+{
+    (void)key;
 }
 
 static void cmd_ota(const char *sub, const char *rest)
@@ -621,6 +645,390 @@ static void cmd_config(const char *sub, const char *rest)
 
 /* ------------------------------------------------------------------ */
 
+
+/* ------------------------------------------------------------------ */
+/* Protocol 2: settings, SD files, OS state, NVS.                     */
+
+static bool parse_bool(const char *s, bool *out)
+{
+    if (strcmp(s, "on") == 0 || strcmp(s, "true") == 0 || strcmp(s, "1") == 0) { *out = true; return true; }
+    if (strcmp(s, "off") == 0 || strcmp(s, "false") == 0 || strcmp(s, "0") == 0) { *out = false; return true; }
+    return false;
+}
+
+static void settings_dump(void)
+{
+    out_raw("OK\n");
+    out_fmt("{\"volume\":%d,\"speaker_on\":%s,\"mic_gain\":%d,\"brightness\":%d,"
+            "\"sleep_s\":%d,\"wifi_on\":%s,\"ble_on\":%s}\n",
+            muse_settings_volume(),
+            muse_settings_speaker_on() ? "true" : "false",
+            muse_settings_mic_gain(),
+            muse_settings_brightness(),
+            muse_settings_sleep_s(),
+            muse_settings_wifi_on() ? "true" : "false",
+            muse_settings_ble_on() ? "true" : "false");
+}
+
+static void cmd_settings(const char *sub, const char *rest)
+{
+    if (!sub || strcmp(sub, "get") == 0) {
+        if (!sub || !rest || !rest[0]) { settings_dump(); return; }
+        char key[24];
+        size_t n = strcspn(rest, " \t");
+        if (n >= sizeof(key)) { out_raw("ERR bad_args unknown setting\n"); return; }
+        memcpy(key, rest, n); key[n] = 0;
+        if (strcmp(key, "volume") == 0) out_fmt("OK volume=%d\n", muse_settings_volume());
+        else if (strcmp(key, "speaker_on") == 0) out_fmt("OK speaker_on=%s\n", muse_settings_speaker_on() ? "on" : "off");
+        else if (strcmp(key, "mic_gain") == 0) out_fmt("OK mic_gain=%d\n", muse_settings_mic_gain());
+        else if (strcmp(key, "brightness") == 0) out_fmt("OK brightness=%d\n", muse_settings_brightness());
+        else if (strcmp(key, "sleep_s") == 0) out_fmt("OK sleep_s=%d\n", muse_settings_sleep_s());
+        else if (strcmp(key, "wifi_on") == 0) out_fmt("OK wifi_on=%s\n", muse_settings_wifi_on() ? "on" : "off");
+        else if (strcmp(key, "ble_on") == 0) out_fmt("OK ble_on=%s\n", muse_settings_ble_on() ? "on" : "off");
+        else out_fmt("ERR bad_args unknown setting '%s'\n", key);
+        return;
+    }
+    if (strcmp(sub, "set") == 0) {
+        if (!rest || !rest[0]) {
+            out_raw("ERR bad_args usage: mdb settings set <key> <value>\n");
+            return;
+        }
+        char key[24];
+        size_t n = strcspn(rest, " \t");
+        if (n >= sizeof(key) || !rest[n]) {
+            out_raw("ERR bad_args usage: mdb settings set <key> <value>\n");
+            return;
+        }
+        memcpy(key, rest, n); key[n] = 0;
+        const char *val = rest + n + 1;
+        bool b; long v = strtol(val, NULL, 10);
+        if (strcmp(key, "volume") == 0) {
+            if (v < 0 || v > 100) { out_raw("ERR out_of_range volume 0..100\n"); return; }
+            muse_settings_set_volume((int)v);
+        } else if (strcmp(key, "brightness") == 0) {
+            if (v < 10 || v > 100) { out_raw("ERR out_of_range brightness 10..100\n"); return; }
+            muse_settings_set_brightness((int)v);
+        } else if (strcmp(key, "mic_gain") == 0) {
+            if (v < 0 || v > MUSE_MIC_GAIN_MAX) { out_raw("ERR out_of_range mic_gain\n"); return; }
+            muse_settings_set_mic_gain((int)v);
+        } else if (strcmp(key, "sleep_s") == 0) {
+            if (v < 0 || v > 86400) { out_raw("ERR out_of_range sleep_s 0..86400\n"); return; }
+            muse_settings_set_sleep_s((int)v);
+        } else if (strcmp(key, "speaker_on") == 0) {
+            if (!parse_bool(val, &b)) { out_raw("ERR bad_args want on|off\n"); return; }
+            muse_settings_set_speaker_on(b);
+        } else if (strcmp(key, "wifi_on") == 0) {
+            if (!parse_bool(val, &b)) { out_raw("ERR bad_args want on|off\n"); return; }
+            muse_settings_set_wifi_on(b);
+        } else if (strcmp(key, "ble_on") == 0) {
+            if (!parse_bool(val, &b)) { out_raw("ERR bad_args want on|off\n"); return; }
+            muse_settings_set_ble_on(b);
+        } else {
+            out_fmt("ERR bad_args unknown setting '%s'\n", key);
+            return;
+        }
+        muse_mdb_settings_changed(key);
+        out_fmt("OK %s set\n", key);
+        return;
+    }
+    out_raw("ERR bad_args usage: mdb settings [get [key]|set <key> <value>]\n");
+}
+
+/* Join /sdcard + a user path, refusing escapes and secret key files for
+ * reads (writes to them are the owner's own business). */
+static bool sd_path(char *out, size_t len, const char *rel, bool for_read)
+{
+    if (!rel || !rel[0]) rel = "/";
+    if (strstr(rel, "..")) return false;
+    const char *base = strrchr(rel, '/');
+    const char *name = base ? base + 1 : rel;
+    if (for_read && (strcmp(name, "tts.key") == 0 ||
+                     (strlen(name) > 4 && strcmp(name + strlen(name) - 4, ".key") == 0))) {
+        return false;   /* secret contents never cross the wire */
+    }
+    if (rel[0] == '/')
+        snprintf(out, len, "/sdcard%s", rel);
+    else
+        snprintf(out, len, "/sdcard/%s", rel);
+    return true;
+}
+
+static void sd_status_json(void)
+{
+    bool present = false, key = false;
+    unsigned total = 0, freeb = 0;
+    muse_mdb_sd_status(&present, &total, &freeb, &key);
+    out_fmt("{\"sd_present\":%s,\"sd_total_mb\":%u,\"sd_free_mb\":%u,\"tts_key_on_sd\":%s}\n",
+            present ? "true" : "false", total, freeb, key ? "true" : "false");
+}
+
+static void cmd_sd(const char *sub, const char *rest)
+{
+    char path[160];
+    if (!sub || strcmp(sub, "status") == 0) {
+        out_raw("OK\n");
+        sd_status_json();
+    } else if (strcmp(sub, "mount") == 0) {
+        if (muse_mdb_sd_mount()) {
+            out_raw("OK mounted\n");
+            sd_status_json();
+        } else {
+            out_raw("ERR mount_failed no card, unseated, or not FAT/FAT32\n");
+        }
+    } else if (strcmp(sub, "ls") == 0) {
+        if (!sd_path(path, sizeof(path), rest, false)) { out_raw("ERR bad_args bad path\n"); return; }
+        DIR *d = opendir(path);
+        if (!d) { out_raw("ERR io cannot open dir (card mounted?)\n"); return; }
+        out_raw("OK\n");
+        struct dirent *e;
+        int n = 0;
+        while ((e = readdir(d)) && n < 64) {
+            char full[192];
+            snprintf(full, sizeof(full), "%s/%s", path, e->d_name);
+            struct stat st;
+            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+                out_fmt("D %s\n", e->d_name);
+            } else {
+                out_fmt("F %s %ld\n", e->d_name, stat(full, &st) == 0 ? (long)st.st_size : -1L);
+            }
+            n++;
+        }
+        closedir(d);
+        out_fmt("END ls %d\n", n);
+    } else if (strcmp(sub, "cat") == 0) {
+        if (!rest || !rest[0]) { out_raw("ERR bad_args usage: mdb sd cat <path>\n"); return; }
+        if (!sd_path(path, sizeof(path), rest, true)) { out_raw("ERR protected_or_bad path\n"); return; }
+        FILE *f = fopen(path, "rb");
+        if (!f) { out_raw("ERR io cannot open file\n"); return; }
+        out_raw("OK\n");
+        char chunk[512];
+        size_t got, total = 0;
+        while (total < 8192 && (got = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+            muse_console_write(chunk, got);
+            total += got;
+        }
+        fclose(f);
+        out_fmt("\nEND cat %u bytes\n", (unsigned)total);
+    } else if (strcmp(sub, "rm") == 0) {
+        if (!rest || !strstr(rest, " confirm")) { out_raw("ERR confirm_required usage: mdb sd rm <path> confirm\n"); return; }
+        char arg[128];
+        size_t n = strcspn(rest, " ");
+        if (n >= sizeof(arg)) { out_raw("ERR bad_args path too long\n"); return; }
+        memcpy(arg, rest, n); arg[n] = 0;
+        if (!sd_path(path, sizeof(path), arg, false)) { out_raw("ERR bad_args bad path\n"); return; }
+        if (remove(path) == 0) out_raw("OK removed\n");
+        else out_raw("ERR io remove failed\n");
+    } else if (strcmp(sub, "write") == 0) {
+        /* mdb sd write <path> <base64> - whole-file write of one chunk
+         * (line-length bounded, ~160 bytes decoded): key/config files. */
+        if (!rest || !rest[0]) { out_raw("ERR bad_args usage: mdb sd write <path> <base64>\n"); return; }
+        const char *sp = strchr(rest, ' ');
+        if (!sp) { out_raw("ERR bad_args usage: mdb sd write <path> <base64>\n"); return; }
+        char arg[128];
+        size_t n = (size_t)(sp - rest);
+        if (n >= sizeof(arg)) { out_raw("ERR bad_args path too long\n"); return; }
+        memcpy(arg, rest, n); arg[n] = 0;
+        if (!sd_path(path, sizeof(path), arg, false)) { out_raw("ERR bad_args bad path\n"); return; }
+        static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        uint8_t data[192];
+        size_t dn = 0;
+        uint32_t acc = 0; int bits = 0;
+        for (const char *p = sp + 1; *p && *p != '='; p++) {
+            const char *q = strchr(T, *p);
+            if (!q) { out_raw("ERR bad_args not base64\n"); return; }
+            acc = (acc << 6) | (uint32_t)(q - T); bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                if (dn >= sizeof(data)) { out_raw("ERR too_big one chunk only (<=192 bytes)\n"); return; }
+                data[dn++] = (uint8_t)(acc >> bits);
+            }
+        }
+        FILE *f = fopen(path, "wb");
+        if (!f) { out_raw("ERR io cannot create file (card mounted?)\n"); return; }
+        size_t wrote = fwrite(data, 1, dn, f);
+        fclose(f);
+        out_fmt("OK wrote %u bytes\n", (unsigned)wrote);
+    } else {
+        out_raw("ERR bad_args usage: mdb sd <status|mount|ls|cat|rm|write>\n");
+    }
+}
+
+static void cmd_sys(const char *sub)
+{
+    if (!sub || strcmp(sub, "info") == 0) {
+        esp_chip_info_t chip;
+        esp_chip_info(&chip);
+        uint32_t flash = 0;
+        esp_flash_get_size(NULL, &flash);
+        out_raw("OK\n");
+        out_fmt("{\"chip\":\"esp32s3\",\"model\":%d,\"rev\":%d,\"cores\":%d,"
+                "\"idf\":\"%s\",\"flash_mb\":%u,\"fw\":\"%s\",\"board\":\"%s\","
+                "\"reset_reason\":\"%s\",\"boots\":%u,\"panics\":%u,\"uptime_s\":%llu}\n",
+                chip.model, chip.revision, chip.cores, esp_get_idf_version(),
+                (unsigned)(flash >> 20), esp_app_get_description()->version,
+                muse_board ? muse_board->name : "?",
+                reset_name(esp_reset_reason()), (unsigned)s_rtc.boots,
+                (unsigned)s_rtc.panics,
+                (unsigned long long)(esp_timer_get_time() / 1000000));
+        out_raw("{\"partitions\":[");
+        bool first = true;
+        esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY,
+                                                         ESP_PARTITION_SUBTYPE_ANY, NULL);
+        for (; it; it = esp_partition_next(it)) {
+            const esp_partition_t *p = esp_partition_get(it);
+            out_fmt("%s{\"label\":\"%s\",\"type\":%u,\"subtype\":%u,\"offset\":%u,\"size\":%u}",
+                    first ? "" : ",", p->label, p->type, p->subtype,
+                    (unsigned)p->address, (unsigned)p->size);
+            first = false;
+        }
+        out_raw("]}\n");
+    } else if (strcmp(sub, "heap") == 0) {
+        out_raw("OK\n");
+        out_fmt("{\"internal\":{\"free\":%u,\"largest\":%u,\"min_free\":%u},"
+                "\"psram\":{\"free\":%u,\"largest\":%u,\"min_free\":%u},"
+                "\"dma_free\":%u}\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA));
+    } else if (strcmp(sub, "tasks") == 0) {
+#if configUSE_TRACE_FACILITY
+        TaskStatus_t *arr = heap_caps_malloc(sizeof(TaskStatus_t) * 40,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!arr) { out_raw("ERR no_mem\n"); return; }
+        uint32_t total = 0;
+        UBaseType_t n = uxTaskGetSystemState(arr, 40, &total);
+        out_raw("OK\n");
+        for (UBaseType_t i = 0; i < n; i++) {
+            static const char cs[] = {'R', 'r', 'B', 'S', 'D', '?'};
+            unsigned st = (unsigned)arr[i].eCurrentState;
+            out_fmt("%s %c prio=%u stack_hwm=%u\n", arr[i].pcTaskName,
+                    cs[st < 5 ? st : 5], (unsigned)arr[i].uxCurrentPriority,
+                    (unsigned)arr[i].usStackHighWaterMark);
+        }
+        out_fmt("END tasks %u\n", (unsigned)n);
+        free(arr);
+#else
+        out_raw("ERR unsupported trace facility off in this build\n");
+#endif
+    } else {
+        out_raw("ERR bad_args usage: mdb sys <info|heap|tasks>\n");
+    }
+}
+
+static const char *nvs_type_name(nvs_type_t t)
+{
+    switch (t) {
+    case NVS_TYPE_U8: return "u8";
+    case NVS_TYPE_I8: return "i8";
+    case NVS_TYPE_U16: return "u16";
+    case NVS_TYPE_I16: return "i16";
+    case NVS_TYPE_U32: return "u32";
+    case NVS_TYPE_I32: return "i32";
+    case NVS_TYPE_U64: return "u64";
+    case NVS_TYPE_I64: return "i64";
+    case NVS_TYPE_STR: return "str";
+    case NVS_TYPE_BLOB: return "blob";
+    default: return "?";
+    }
+}
+
+static void cmd_nvs(const char *sub, const char *rest)
+{
+    if (!sub || strcmp(sub, "list") == 0) {
+        const char *want_ns = rest && rest[0] ? rest : NULL;
+        nvs_iterator_t it = NULL;
+        esp_err_t err = nvs_entry_find("nvs", want_ns, NVS_TYPE_ANY, &it);
+        if (err != ESP_OK) { out_raw("OK\nEND nvs 0\n"); return; }
+        out_raw("OK\n");
+        nvs_handle_t h = 0;
+        int entry_count = 0;
+        char cur_ns[16] = "";
+        while (it) {
+            nvs_entry_info_t info;
+            nvs_entry_info(it, &info);
+            entry_count++;
+            if (strcmp(cur_ns, info.namespace_name) != 0) {
+                if (h) nvs_close(h);
+                h = 0;
+                if (nvs_open(info.namespace_name, NVS_READONLY, &h) == ESP_OK) {
+                    strlcpy(cur_ns, info.namespace_name, sizeof(cur_ns));
+                } else {
+                    cur_ns[0] = 0;
+                }
+            }
+            /* Values: numbers print (they are state, not secrets);
+             * strings and blobs report length only. */
+            if (info.type == NVS_TYPE_STR || info.type == NVS_TYPE_BLOB) {
+                size_t len = 0;
+                if (h && info.type == NVS_TYPE_STR)
+                    nvs_get_str(h, info.key, NULL, &len);
+                if (h && info.type == NVS_TYPE_BLOB)
+                    nvs_get_blob(h, info.key, NULL, &len);
+                out_fmt("%s %s %s len=%u\n", info.namespace_name, info.key,
+                        nvs_type_name(info.type), (unsigned)len);
+                if (nvs_entry_next(&it) != ESP_OK) break;
+                continue;
+            }
+            long long val = 0;
+            bool have = false;
+            if (h) {
+                uint8_t u8; int8_t i8; uint16_t u16; int16_t i16;
+                uint32_t u32; int32_t i32; uint64_t u64; int64_t i64;
+                switch (info.type) {
+                case NVS_TYPE_U8: have = nvs_get_u8(h, info.key, &u8) == ESP_OK; val = u8; break;
+                case NVS_TYPE_I8: have = nvs_get_i8(h, info.key, &i8) == ESP_OK; val = i8; break;
+                case NVS_TYPE_U16: have = nvs_get_u16(h, info.key, &u16) == ESP_OK; val = u16; break;
+                case NVS_TYPE_I16: have = nvs_get_i16(h, info.key, &i16) == ESP_OK; val = i16; break;
+                case NVS_TYPE_U32: have = nvs_get_u32(h, info.key, &u32) == ESP_OK; val = u32; break;
+                case NVS_TYPE_I32: have = nvs_get_i32(h, info.key, &i32) == ESP_OK; val = i32; break;
+                case NVS_TYPE_U64: have = nvs_get_u64(h, info.key, &u64) == ESP_OK; val = (long long)u64; break;
+                case NVS_TYPE_I64: have = nvs_get_i64(h, info.key, &i64) == ESP_OK; val = (long long)i64; break;
+                default: break;
+                }
+            }
+            if (have) out_fmt("%s %s %s %lld\n", info.namespace_name, info.key,
+                              nvs_type_name(info.type), val);
+            else out_fmt("%s %s %s\n", info.namespace_name, info.key,
+                         nvs_type_name(info.type));
+            if (nvs_entry_next(&it) != ESP_OK) break;
+        }
+        if (h) nvs_close(h);
+        out_fmt("END nvs %d\n", entry_count);
+    } else if (strcmp(sub, "erase") == 0 || strcmp(sub, "erase-ns") == 0) {
+        bool whole = strcmp(sub, "erase-ns") == 0;
+        if (!rest || !strstr(rest, " confirm")) {
+            out_raw("ERR confirm_required usage: mdb nvs erase <ns> [key] confirm\n");
+            return;
+        }
+        char ns[16], key[16] = "";
+        if (whole) {
+            size_t n = strcspn(rest, " ");
+            if (n >= sizeof(ns)) { out_raw("ERR bad_args ns too long\n"); return; }
+            memcpy(ns, rest, n); ns[n] = 0;
+        } else {
+            if (sscanf(rest, "%15s %15s", ns, key) < 2) {
+                out_raw("ERR bad_args usage: mdb nvs erase <ns> <key> confirm\n");
+                return;
+            }
+        }
+        nvs_handle_t h;
+        if (nvs_open(ns, NVS_READWRITE, &h) != ESP_OK) {
+            out_raw("ERR io no such namespace\n");
+            return;
+        }
+        esp_err_t err = whole ? nvs_erase_all(h) : nvs_erase_key(h, key);
+        if (err == ESP_OK) err = nvs_commit(h);
+        nvs_close(h);
+        out_raw(err == ESP_OK ? "OK erased\n" : "ERR io erase failed\n");
+    } else {
+        out_raw("ERR bad_args usage: mdb nvs <list [ns]|erase <ns> <key> confirm|erase-ns <ns> confirm>\n");
+    }
+}
+
 void muse_mdb_init(void)
 {
     /* Quiet the touch driver's NACK chatter (see flash10 note): two
@@ -721,6 +1129,43 @@ void muse_mdb_handle_line(const char *line)
         muse_audio_set_volume(vol);
         muse_voice_request_chirp();
         out_fmt("OK chirp vol=%d\n", vol);
+    } else if (strcmp(verb, "settings") == 0) {
+        char *sub = strtok_r(NULL, " \t", &save);
+        cmd_settings(sub, sub ? strtok_r(NULL, "", &save) : NULL);
+    } else if (strcmp(verb, "sd") == 0) {
+        char *sub = strtok_r(NULL, " \t", &save);
+        cmd_sd(sub, sub ? strtok_r(NULL, "", &save) : NULL);
+    } else if (strcmp(verb, "sys") == 0) {
+        cmd_sys(strtok_r(NULL, " \t", &save));
+    } else if (strcmp(verb, "nvs") == 0) {
+        char *sub = strtok_r(NULL, " \t", &save);
+        cmd_nvs(sub, sub ? strtok_r(NULL, "", &save) : NULL);
+    } else if (strcmp(verb, "loglevel") == 0) {
+        char *tag = strtok_r(NULL, " \t", &save);
+        char *lvl = strtok_r(NULL, " \t", &save);
+        if (tag && lvl) {
+            esp_log_level_t l = ESP_LOG_NONE;
+            if (strcmp(lvl, "error") == 0) l = ESP_LOG_ERROR;
+            else if (strcmp(lvl, "warn") == 0) l = ESP_LOG_WARN;
+            else if (strcmp(lvl, "info") == 0) l = ESP_LOG_INFO;
+            else if (strcmp(lvl, "debug") == 0) l = ESP_LOG_DEBUG;
+            else if (strcmp(lvl, "verbose") == 0) l = ESP_LOG_VERBOSE;
+            else if (strcmp(lvl, "none") != 0) {
+                out_raw("ERR bad_args level: none|error|warn|info|debug|verbose\n");
+                tag = NULL;
+            }
+            if (tag) {
+                esp_log_level_set(tag, l);
+                out_raw("OK log level set\n");
+            }
+        } else {
+            out_raw("ERR bad_args usage: mdb loglevel <tag|*> <level>\n");
+        }
+    } else if (strcmp(verb, "poweroff") == 0) {
+        out_raw("OK powering off\n");
+        vTaskDelay(pdMS_TO_TICKS(80));
+        if (muse_board && muse_board->power_off) muse_board->power_off();
+        out_raw("ERR power_off_failed\n");
     } else if (strcmp(verb, "ota") == 0) {
         char *sub = strtok_r(NULL, " \t", &save);
         cmd_ota(sub, sub ? strtok_r(NULL, "", &save) : NULL);

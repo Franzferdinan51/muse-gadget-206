@@ -953,6 +953,18 @@ static void glue_ota_cb(const ota_event_t *ev, void *user)
     }
 }
 
+/* MDB hooks (weak in muse_mdb.c): SD mount + settings re-apply. */
+bool muse_mdb_sd_mount(void)
+{
+    return muse_sd_mount() == ESP_OK || muse_sd_mounted();
+}
+
+void muse_mdb_settings_changed(const char *key)
+{
+    if (strcmp(key, "ble_on") == 0) keeper_kick(KEEP_BLE);
+    else if (strcmp(key, "wifi_on") == 0) keeper_kick(KEEP_WIFI);
+}
+
 /* MDB health hook (weak in muse_mdb.c): SD card state. */
 bool muse_mdb_sd_status(bool *present, unsigned *total_mb,
                         unsigned *free_mb, bool *key_on_sd)

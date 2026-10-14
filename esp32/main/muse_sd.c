@@ -18,7 +18,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/statvfs.h>
 
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
@@ -108,10 +107,12 @@ bool muse_sd_mounted(void)
 bool muse_sd_info(uint64_t *total_bytes, uint64_t *free_bytes)
 {
     if (!s_mounted) return false;
-    struct statvfs st;
-    if (statvfs(MUSE_SD_MOUNT_POINT, &st) != 0) return false;
-    if (total_bytes) *total_bytes = (uint64_t)st.f_blocks * st.f_frsize;
-    if (free_bytes) *free_bytes = (uint64_t)st.f_bfree * st.f_frsize;
+    /* esp_vfs_fat_info, not statvfs: the FatFs VFS statvfs path fails on
+     * this mount while plain file I/O works fine (found live, 1.7.15). */
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(MUSE_SD_MOUNT_POINT, &total, &freeb) != ESP_OK) return false;
+    if (total_bytes) *total_bytes = total;
+    if (free_bytes) *free_bytes = freeb;
     return true;
 }
 
