@@ -1929,6 +1929,19 @@ static void frame_tick(lv_timer_t *timer)
         muse_ui_frame_stage = 8;
         return;
     }
+    /* 1.7.44 battery pass: on battery under the saving policy the face
+     * does not need 25 fps. Run the animation body every 3rd tick
+     * (~8 fps) except while SPEAKING or LISTENING, which want the full
+     * rate. The bookkeeping above (snapshots, mode changes, sleep)
+     * still runs every tick. */
+    {
+        static int eco_div;
+        if (muse_state_power_saving() && muse_state_on_battery()
+            && mode != MUSE_MODE_SPEAKING && mode != MUSE_MODE_LISTENING
+            && (++eco_div % 3) != 0) {
+            return;
+        }
+    }
     muse_ui_frame_stage = 3;
     update_chrome(now);
     juno_sync(mode);
